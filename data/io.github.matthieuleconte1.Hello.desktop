@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Hello
+GenericName=Lanceur
+Comment=Apps, terminal, presse-papiers, emoji, couleurs… derrière un raccourci
+Exec=@EXEC@
+Icon=io.github.matthieuleconte1.Hello
+Terminal=false
+Categories=Utility;
+Keywords=launcher;lanceur;spotlight;raycast;alfred;
+StartupNotify=false
+DBusActivatable=false
