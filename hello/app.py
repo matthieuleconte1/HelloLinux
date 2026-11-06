@@ -16,7 +16,7 @@ from .colors import ColorStore
 from .glyphs import GlyphIndex
 from .hotkey import GlobalHotkey
 from .model import LauncherModel
-from .settings import APP_ID, settings
+from .settings import APP_ID, motion_enabled, settings
 from . import shell
 from .styles import css, reveal_css
 from . import updater
@@ -41,6 +41,7 @@ class HelloApp(Adw.Application):
         self.add_main_option("settings", 0, GLib.OptionFlags.NONE, GLib.OptionArg.NONE, "Ouvre les réglages", None)
         self.add_main_option("quit", ord("q"), GLib.OptionFlags.NONE, GLib.OptionArg.NONE, "Quitte Hello", None)
         self.window = None
+        self._closing = None
         self.started = False
         self.visible = False
         self.resume_until = 0
@@ -223,6 +224,11 @@ class HelloApp(Adw.Application):
         self.model.mark_agent_seen()
         Updater.check_if_due()
         self.resume_until = 0
+        # Réouverture pendant l'effacement : on l'arrête net.
+        self._closing = None
+        w.panel.remove_css_class("closing")
+        w.panel_holder.remove_css_class("hello-fading")
+        w.screen_mode = None
         w.place()
         w._set_panel_size(*w.target_size())
         was_visible = self.visible
@@ -250,9 +256,23 @@ class HelloApp(Adw.Application):
         if self.model.run and not self.model.run.running and not away:
             self.model.run = None
         w = self.window
-        if settings.animations and tint:
+        if tint and motion_enabled():
+            # App lancée : le panneau fait le geste de son style et s'efface (≈0,22 s), puis il est masqué.
+            from .styles import close_duration
             w.panel.add_css_class("closing")
-            GLib.timeout_add(170, lambda: (w.set_visible(False), w.panel.remove_css_class("closing"), False)[2])
+            w.panel_holder.add_css_class("hello-fading")
+            token = object()
+            self._closing = token
+
+            def finish():
+                if self._closing is token:
+                    self._closing = None
+                    if not self.visible:
+                        w.set_visible(False)
+                    w.panel.remove_css_class("closing")
+                    w.panel_holder.remove_css_class("hello-fading")
+                return False
+            GLib.timeout_add(close_duration(), finish)
         else:
             w.set_visible(False)
 

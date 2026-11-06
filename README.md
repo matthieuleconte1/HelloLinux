@@ -249,6 +249,7 @@ Environ 13 000 lignes de Python, sur GTK 4 et libadwaita (PyGObject), sans autre
 | `hello/model.py` | les modes, la recherche, le clavier, les actions (LauncherModel) |
 | `hello/ui.py` | le panneau GTK : liste, grille d'apps, emoji, aperçus, terminal, agent |
 | `hello/styles.py`, `hello/mark.py`, `hello/decode.py` | les sept peaux (CSS GTK générée, style KDE lu dans kdeglobals), leurs ouvertures (mouvement du panneau, cascade des lignes, signature dessinée), le logo et le décodage ASCII |
+| `hello/motion.py` | le mouvement : ressorts repris de la version Mac, sélection qui glisse d'une ligne à l'autre, panneau qui s'agrandit sans remettre sa grille en page à chaque image, animations calées sur l'horloge d'affichage |
 | `hello/blur.py`, `hello/tray.py` | détection du flou du compositeur, icône et menu de la zone de notification |
 | `hello/prefs.py` | les réglages (libadwaita) |
 | `hello/apps.py`, `hello/usage.py`, `hello/fuzzy.py` | index des apps, frécence, recherche floue |
@@ -268,3 +269,5 @@ Tests : `python3 -m unittest discover -s tests`.
 La bannière et les captures sont produites par du code : `python3 scripts/make-banner.py` et
 `python3 scripts/make-screens.py`. Le second lance la vraie fenêtre de Hello dans un KWin virtuel, sans rien afficher
 à l'écran, avec des réglages jetables ; il ne reprend que les apps des statistiques, pour les récents.
+`python3 scripts/bench-motion.py [--film DOSSIER] [style…]` joue au clavier les animations de chaque style dans ce même
+KWin virtuel, mesure le temps passé sur le fil principal à chaque image et, avec `--film`, en fait des planches.

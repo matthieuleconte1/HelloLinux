@@ -10,13 +10,14 @@ from html import escape
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from . import blur as blurmod
-from . import decode, engines, icontrace, shell, styles, usage
+from . import decode, engines, icontrace, motion, shell, styles, usage
 from .agent import Hermes
 from .glyphs import FILTERS
 from .mark import AnimatedMark, DotWave, Flourish, Sweep
 from .model import EMPTY_TEXT, MODES, mode_title
 from .settings import decodes, grid_columns, icon_size, motion_enabled, motion_speed, panel_size, settings
-from .styles import ARRIVAL_ROWS, ARRIVALS, rgb, section_title, tokens
+from .styles import (ARRIVAL_ROWS, ARRIVALS, FIT_SPRING, MORPH_SPRING, SCROLL_SPRING, rgb, section_title,
+                     selection_spring, tokens)
 from .term import TermStyle, hex_color
 from .ui_markdown import MarkdownView
 
@@ -344,6 +345,15 @@ class LauncherWindow(Gtk.ApplicationWindow):
         self._decoded_cell = None
         self._glyph_faders = {}      # position -> fondu ASCII de la case d'emoji affichée
         self._agent_shape = None
+        self.glide = None            # sélection qui glisse dans la liste (motion.Glide)
+        self._page_glides = []       # et dans chaque page de la grille d'applications
+        self._panel_top = 0.0
+        self._geo_anim = None        # ressort du cadre du panneau (taille et position)
+        self._geo_kind = None        # « morph », « fit » ou « unfold »
+        self._scroll_anim = None
+        self._scroll_from = self._scroll_to = 0.0
+        self.screen_mode = None      # écran affiché, pour jouer la transition quand il change
+        self.decoder.attach(self)
 
         if self.layer:
             LayerShell.init_for_window(self)
@@ -453,10 +463,18 @@ class LauncherWindow(Gtk.ApplicationWindow):
         self.div1 = Gtk.Box()
         self.div1.add_css_class("hello-divider")
         self.panel.append(self.div1)
+        # Le cadre du contenu change de taille avec le panneau ; pendant une animation, le contenu garde sa taille
+        # finale et n'est que découpé (motion.Pinned). `content` est l'écran affiché (transitions d'écran).
+        self.content_frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.content_frame.add_css_class("hello-content")
+        self.content_frame.set_vexpand(True)
         self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.content.add_css_class("hello-content")
+        self.content.add_css_class("hello-screen")
         self.content.set_vexpand(True)
-        self.panel.append(self.content)
+        self.content.set_hexpand(True)
+        self.content_pin = motion.Pinned(self.content)
+        self.content_frame.append(self.content_pin)
+        self.panel.append(self.content_frame)
         self.div2 = Gtk.Box()
         self.div2.add_css_class("hello-divider")
         self.panel.append(self.div2)
@@ -507,19 +525,23 @@ class LauncherWindow(Gtk.ApplicationWindow):
             h = int(min(max(mh * 0.78, h), 800))
         return w, h
 
-    def place(self):
-        """Position du panneau : tiers supérieur ou centre de l'écran."""
+    def target_top(self):
+        """Position du panneau : tiers supérieur ou centre de l'écran (la grille d'applications, au centre)."""
+        if not self.layer:
+            return 20
         mw, mh = self.monitor_geometry()
         _, h = self.target_size()
         if settings.panelPosition == "center":
-            top = max(24, (mh - h) // 2)
-        else:
-            top = max(24, int(mh * 0.18) if not self.apps_mode else (mh - h) // 2)
-        self.panel_holder.set_margin_top(top)
+            return max(24, (mh - h) // 2)
+        return max(24, int(mh * 0.18) if not self.apps_mode else (mh - h) // 2)
+
+    def place(self):
+        self._stop_geometry()
+        self._panel_top = self.target_top()
+        self.panel_holder.set_margin_top(self._panel_top)
         if not self.layer:
-            w, _ = self.target_size()
+            w, h = self.target_size()
             self.set_default_size(w + 40, h + 40)
-            self.panel_holder.set_margin_top(20)
 
     def begin_reveal(self):
         """Avant le rendu d'une ouverture complète : la liste est reconstruite pour que ses lignes arrivent en
@@ -531,22 +553,21 @@ class LauncherWindow(Gtk.ApplicationWindow):
     def reveal(self, light=False):
         t = tokens()
         style = t["style"]
-        for name in ("reveal", "reveal-light"):
-            self.panel.remove_css_class(name)
-        self.footer.remove_css_class("arrive")
         self.panel.remove_css_class("closing")
         self.flourish.stop()
         animate = motion_enabled()
         # Réouverture rapide : un simple fondu (le Verre seulement) ; sinon, l'ouverture complète du style.
         name = "reveal-light" if light and style == "glass" else None if light else "reveal"
+        # Posée tout de suite (styles.replay) : la première image dessinée est déjà celle de l'animation.
         if animate and name:
-            # Retirée puis remise au tour suivant : l'animation CSS repart de zéro à chaque ouverture.
-            def start():
-                self.panel.add_css_class(name)
-                if name == "reveal" and style in ARRIVALS:
-                    self.footer.add_css_class("arrive")
-                return False
-            GLib.idle_add(start)
+            styles.replay(self.panel, name, [n for n in ("reveal", "reveal-light") if n != name])
+        else:
+            for n in ("reveal", "reveal-light"):
+                self.panel.remove_css_class(n)
+        if animate and name == "reveal" and style in ARRIVALS:
+            styles.replay(self.footer, "arrive")
+        else:
+            self.footer.remove_css_class("arrive")
         if animate and not light and style == "atelier" and not self.model.collapsed:
             self._unfold()
         if animate and not light and settings.haloSweep:
@@ -572,14 +593,8 @@ class LauncherWindow(Gtk.ApplicationWindow):
         start = min(height, HEADER + 16)
         if height - start < 40:
             return
-        self._set_panel_size(width, start)
-        speed = motion_speed()
-        params = Adw.SpringParams.new(0.74, 1, 420 * speed * speed)
-        self._morph_anim = Adw.SpringAnimation.new(
-            self, start, height, params, Adw.CallbackAnimationTarget.new(lambda v: self._set_panel_size(width, int(v))))
-        self._morph_anim.set_clamp(False)
-        self._morph_anim.connect("done", lambda *_: self._set_panel_size(width, height))
-        self._morph_anim.play()
+        self._apply_geometry(width, start, self._panel_top)
+        self._geometry(width, height, self._panel_top, motion.Spring(0.31, 0.74), "unfold")
 
     def _arrive(self, widget, order):
         """Ouverture complète en cours (hors Glyphe, qui décode) : la ligne arrive à son tour dans la cascade."""
@@ -599,29 +614,77 @@ class LauncherWindow(Gtk.ApplicationWindow):
     # MARK: Taille
 
     def morph(self, apps):
-        """Agrandissement vers la grille d'applications (ou retour), animé."""
+        """Agrandissement vers la grille d'applications (ou retour) : un ressort sur le cadre du panneau, taille et
+        position ensemble (Controller.morphPanel). Relancé en plein vol, il repart d'où il en est, avec sa vitesse."""
         self.apps_mode = apps
-        target_w, target_h = self.target_size()
-        start_w, start_h = self._panel_w, self._panel_h
-        self.place()
-        if not settings.animations:
-            self._set_panel_size(target_w, target_h)
-            return
-
-        def step(t):
-            self._set_panel_size(int(start_w + (target_w - start_w) * t), int(start_h + (target_h - start_h) * t))
-
-        self._morph_anim = Adw.TimedAnimation.new(self, 0, 1, int(260 / max(settings.animationSpeed, 0.1)),
-                                                  Adw.CallbackAnimationTarget.new(step))
-        self._morph_anim.set_easing(Adw.Easing.EASE_OUT_CUBIC)
-        self._morph_anim.play()
+        w, h = self.target_size()
+        if not self.layer:
+            self.set_default_size(w + 40, h + 40)
+        self._geometry(w, h, self.target_top(), MORPH_SPRING, "morph")
 
     def _set_panel_size(self, w, h):
+        """Taille posée tout de suite (ouverture, sans animation)."""
+        self._stop_geometry()
+        self._apply_geometry(w, h, self._panel_top)
+
+    def _apply_geometry(self, w, h, top):
+        w, h = max(1, round(w)), max(HEADER, round(h))
         self._panel_w, self._panel_h = w, h
         self.panel.set_size_request(w, h)
-        content_h = max(0, h - HEADER - FOOTER - 2)
-        self.content.set_size_request(w, content_h)
+        self.content_frame.set_size_request(w, max(0, h - HEADER - FOOTER - 2))
+        if self.layer and round(top) != round(self._panel_top):
+            self.panel_holder.set_margin_top(round(top))
+        self._panel_top = top
         self.schedule_blur()
+
+    def _stop_geometry(self):
+        if motion.playing(self._geo_anim):
+            self._geo_anim.pause()
+        self._geo_anim = None
+        self._geo_kind = None
+        self.content_pin.set_pin(None)
+
+    def _geometry(self, w, h, top, spring, kind):
+        """Le cadre du panneau va vers (w, h, top) avec `spring`. Pendant le trajet, le contenu est épinglé à sa
+        taille finale : seul le cadre (en-tête, pied de page, fond) est remis en page à chaque image."""
+        start = (self._panel_w, self._panel_h, self._panel_top)
+        target = (w, h, top)
+        if motion.playing(self._geo_anim) and self._geo_to == target:
+            return
+        if start == target:
+            if not motion.playing(self._geo_anim):
+                self._stop_geometry()
+            return
+        if not motion_enabled() or not self.get_mapped() or not self.c.visible:
+            self._stop_geometry()
+            self._apply_geometry(w, h, top)
+            return
+        # Écarts constants entre le cadre et le contenu (marges, bordure du volet) : la taille finale du contenu.
+        dw = self._panel_w - self.content_pin.get_width() if self.content_pin.get_width() else 16
+        dh = self._panel_h - self.content_pin.get_height() if self.content_pin.get_height() else HEADER + FOOTER + 2
+        self.content_pin.set_pin((max(1, round(w - dw)), max(1, round(h - dh))))
+        velocity = 0.0
+        if motion.playing(self._geo_anim):
+            old = self._geo_to
+            travelled = sum(abs(a - b) for a, b in zip(old, self._geo_from))
+            remaining = sum(abs(a - b) for a, b in zip(target, start))
+            if remaining > 0:
+                velocity = motion.velocity(self._geo_anim) * travelled / remaining
+            self._geo_anim.pause()
+        self._geo_from, self._geo_to = start, target
+        self._geo_kind = kind
+
+        def step(p):
+            self._apply_geometry(*(motion.lerp(a, b, p) for a, b in zip(self._geo_from, self._geo_to)))
+
+        def done():
+            if self._geo_anim is animation:
+                self._apply_geometry(*self._geo_to)
+                self._geo_anim = None
+                self._geo_kind = None
+                self.content_pin.set_pin(None)
+        animation = motion.animate(self, spring, 0.0, 1.0, step, done, velocity)
+        self._geo_anim = animation
 
     # MARK: Flou (KWin)
 
@@ -655,11 +718,15 @@ class LauncherWindow(Gtk.ApplicationWindow):
         return False
 
     def fit(self):
-        """Hauteur du panneau : à l'accueil, juste ce qu'il faut pour les résultats."""
-        if self._morph_anim and self._morph_anim.get_state() == Adw.AnimationState.PLAYING:
+        """Hauteur du panneau : à l'accueil, juste ce qu'il faut pour les résultats. Bord du haut fixe : le panneau
+        s'allonge ou se replie vers le bas, sur un ressort court (Controller.fitPanelHeight)."""
+        if self._geo_kind in ("morph", "unfold"):
             return
         w, h = self.target_size()
-        self._set_panel_size(w, self.model.preferred_height(h))
+        target = self.model.preferred_height(h)
+        if target == self._panel_h and w == self._panel_w and not motion.playing(self._geo_anim):
+            return
+        self._geometry(w, target, self._panel_top, FIT_SPRING, "fit")
 
     # MARK: Rendu
 
@@ -706,7 +773,7 @@ class LauncherWindow(Gtk.ApplicationWindow):
         mode = m.mode
         self._render_header(t)
         collapsed = m.collapsed
-        for w in (self.div1, self.content, self.div2, self.footer):
+        for w in (self.div1, self.content_frame, self.div2, self.footer):
             w.set_visible(not collapsed)
 
         # « / » dans le champ de question de suite : la liste des commandes remplace un instant la conversation.
@@ -720,11 +787,24 @@ class LauncherWindow(Gtk.ApplicationWindow):
             self._update_special(mode)
         elif key != self._shown:
             self._build_content(mode)
+        if key != self._shown and self.screen_mode is not None and mode != self.screen_mode:
+            self._enter_screen(m.forward)
+        self.screen_mode = mode
         self._shown = key
         self._update_selection()
         self._render_footer()
         self.fit()
         self.schedule_blur()
+
+    def _enter_screen(self, forward):
+        """Changement d'écran (applications, presse-papiers, retour…) : le nouvel écran arrive du côté où l'on va,
+        sur le ressort de navigation du style (styles.reveal_css)."""
+        if not motion_enabled() or not self.get_visible():
+            for name in ("enter-forward", "enter-back"):
+                self.content.remove_css_class(name)
+            return
+        name = "enter-forward" if forward else "enter-back"
+        styles.replay(self.content, name, ["enter-back" if forward else "enter-forward"])
 
     def invalidate(self):
         """Le style a changé : tout reconstruire au prochain rendu."""
@@ -802,6 +882,11 @@ class LauncherWindow(Gtk.ApplicationWindow):
             child = nxt
         self._rows = []
         self.list = None
+        self.glide = None
+        self._page_glides = []
+        if motion.playing(self._scroll_anim):
+            self._scroll_anim.pause()
+        self._scroll_anim = None
         self.carousel = None
         self.preview = None
         self._glyph_store = None
@@ -850,7 +935,15 @@ class LauncherWindow(Gtk.ApplicationWindow):
         lst.set_selection_mode(Gtk.SelectionMode.NONE)
         lst.set_focusable(False)
         lst.set_activate_on_single_click(True)
-        scrolled.set_child(lst)
+        # La sélection glisse d'une ligne à l'autre. Atelier, comme sur Mac, colore la carte choisie à la place.
+        if t["style"] == "atelier":
+            scrolled.set_child(lst)
+        else:
+            lst.add_css_class("hello-glided")
+            glide = motion.Glide(lst)
+            glide.spring = selection_spring(t)
+            scrolled.set_child(glide)
+            self.glide = glide
         size = icon_size()
         self._rows = []
         previous_section = None
@@ -984,6 +1077,10 @@ class LauncherWindow(Gtk.ApplicationWindow):
         if m.mode == "apps" and getattr(self, "carousel", None):
             for i, cell in enumerate(self._rows):
                 (cell.add_css_class if i == m.selection else cell.remove_css_class)("selected")
+            per = max(m.apps_per_page, 1)
+            for index, page in enumerate(self._page_glides):
+                inside = 0 <= m.selection < len(self._rows) and m.selection // per == index
+                page.select(self._rows[m.selection] if inside else None)
             if decodes() and 0 <= m.selection < len(self._rows) and m.selection != self._decoded_cell:
                 cell = self._rows[m.selection]
                 first = self._decoded_cell is None
@@ -1006,6 +1103,8 @@ class LauncherWindow(Gtk.ApplicationWindow):
             if cover is not None and cover.selected != (i == m.selection):
                 cover.selected = i == m.selection
                 cover.queue_draw()
+        if self.glide is not None:
+            self.glide.select(self._rows[m.selection] if 0 <= m.selection < len(self._rows) else None)
         if self._rows and 0 <= m.selection < len(self._rows):
             GLib.idle_add(self._scroll_to_selection)
             # Glyphe : la ligne qu'on sélectionne se décode à nouveau, brièvement.
@@ -1031,10 +1130,26 @@ class LauncherWindow(Gtk.ApplicationWindow):
         y, h = rect.get_y(), rect.get_height()
         if m.selection == 0:
             y = 0  # garder l'en-tête de section visible
-        if y < adj.get_value():
-            adj.set_value(y)
-        elif y + h > adj.get_value() + adj.get_page_size():
-            adj.set_value(y + h - adj.get_page_size() + 8)
+        # Visée : depuis la position où le défilement en cours va (pas d'à-coup en enchaînant les flèches).
+        current = self._scroll_to if motion.playing(self._scroll_anim) else adj.get_value()
+        target = current
+        if y < current:
+            target = y
+        elif y + h > current + adj.get_page_size():
+            target = y + h - adj.get_page_size() + 8
+        target = min(max(target, 0), max(adj.get_upper() - adj.get_page_size(), 0))
+        if target == current:
+            return False
+        if not motion_enabled() or not self.get_visible():
+            adj.set_value(target)
+            return False
+        # Le ressort anime directement la position (en pixels) : relancé, il garde sa vitesse.
+        speed = motion.velocity(self._scroll_anim)
+        if motion.playing(self._scroll_anim):
+            self._scroll_anim.pause()
+        start = adj.get_value()
+        self._scroll_from, self._scroll_to = start, target
+        self._scroll_anim = motion.animate(self.scrolled, SCROLL_SPRING, start, target, adj.set_value, velocity=speed)
         return False
 
     # Grille d'applications
@@ -1055,8 +1170,10 @@ class LauncherWindow(Gtk.ApplicationWindow):
         self._rows = []
         self._decoded_cell = None
         fades = decodes()
+        spring = selection_spring()
         for page_start in range(0, max(len(m.items), 1), per):
             grid = Gtk.Grid()
+            grid.add_css_class("hello-glided")
             grid.set_row_homogeneous(True)
             grid.set_column_homogeneous(True)
             grid.set_hexpand(True)
@@ -1104,7 +1221,10 @@ class LauncherWindow(Gtk.ApplicationWindow):
                 cell.add_controller(click)
                 grid.attach(cell, slot % columns, slot // columns, 1, 1)
                 self._rows.append(cell)
-            carousel.append(grid)
+            page = motion.Glide(grid, css="hello-glide cell")
+            page.spring = spring
+            self._page_glides.append(page)
+            carousel.append(page)
         carousel.connect("page-changed", self._page_changed)
         if fades:
             self._fade_page(min(m.app_page, max((len(m.items) - 1) // per, 0)), quick=False)

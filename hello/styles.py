@@ -3,7 +3,8 @@ Le style KDE, propre à Linux, suit le thème de couleurs de Plasma (kdeglobals)
 import configparser
 import os
 
-from .settings import ROW_DENSITY, glyph_appearance, motion_speed, settings
+from .motion import Spring, clamp01, keyframes, smooth, snappy
+from .settings import ROW_DENSITY, glyph_appearance, motion_enabled, motion_speed, settings
 
 # Flou KWin disponible pour le panneau (renseigné par la fenêtre une fois affichée) : le Verre et le style KDE
 # deviennent alors translucides.
@@ -56,6 +57,22 @@ GLYPH_ACCENTS = {"orange": ("Orange", "#ED6A0C", "#FFFFFF"), "amber": ("Ambre", 
                  "violet": ("Violet", "#A25BFF", "#FFFFFF"), "mono": ("Mono", None, None)}
 GLYPH_FONT = "'Red Hat Display', 'Inter', 'Noto Sans', sans-serif"
 GLYPH_DISPLAY = "'Zalando Sans Expanded', 'Red Hat Display', 'Inter', 'Noto Sans', sans-serif"
+
+# Mouvement de la sélection (StyleTokens.motion de la version Mac) ; None : saut net (Phosphore, un terminal).
+# Le style KDE, propre à Linux, prend la vivacité des menus de Plasma.
+SELECTION_SPRINGS = {"kde": snappy(0.16), "glass": snappy(0.18), "atelier": Spring(0.32, 0.8), "glyph": Spring(0.36, 0.78),
+                     "phosphor": None, "paper": smooth(0.2), "brutal": Spring(0.24, 0.55)}
+# Défilement de la liste jusqu'à la sélection.
+SCROLL_SPRING = smooth(0.3)
+# Hauteur ajustée aux résultats, et passage à la grille d'applications (Controller.swift).
+FIT_SPRING = Spring(0.3, 0.88)
+MORPH_SPRING = Spring(0.44, 0.84)
+
+
+def selection_spring(t=None):
+    t = t or tokens()
+    return SELECTION_SPRINGS.get(t["style"])
+
 
 # Dégradé du logo et du reflet du Verre.
 GLASS_COLORS = ["#5B4CFA", "#ED5CBF", "#FFA866", "#FFE9CF"]
@@ -326,6 +343,15 @@ def css():
     density = ROW_DENSITY.get(settings.rowDensity, ROW_DENSITY["standard"])
     row_h = density[1]
     sel_ink = f"color: {t['selection_ink']};" if t.get("selection_ink") else ""
+    # Changement de sélection : la couleur du texte (et, sans glissement, le fond et l'arrondi) suit le ressort du
+    # style, comme SwiftUI interpole foregroundStyle avec matchedGeometryEffect.
+    spring = selection_spring(t)
+    if spring is None or not motion_enabled():
+        select_transition = "none"
+    else:
+        settle = round(spring.scaled().settling() * 1000 * 0.6)
+        select_transition = (f"color {settle}ms ease-out, background-color {settle}ms ease-out, "
+                             f"border-radius {settle}ms ease-out")
     sel_extra = ""
     if t.get("selection_bar"):
         sel_extra = f"box-shadow: inset 3px 0 0 {t['selection_bar']};"
@@ -398,10 +424,12 @@ def css():
                       f"min-width: 34px; min-height: 34px; }}")
     cards = ""
     if t["style"] == "atelier":
+        # Listes segmentées ; la carte choisie prend la couleur et l'arrondi de la sélection (SegmentCard).
         cards = (f".hello-list row.hello-row {{ background: {t['card']}; border-radius: 5px; margin-bottom: 2px; }}"
                  f".hello-list row.hello-row.first {{ border-top-left-radius: 20px; border-top-right-radius: 20px; }}"
                  f".hello-list row.hello-row.last {{ border-bottom-left-radius: 20px; "
-                 f"border-bottom-right-radius: 20px; }}")
+                 f"border-bottom-right-radius: 20px; }}"
+                 f".hello-list row.hello-row.selected {{ border-radius: {t['row_radius']}px; }}")
     mono_title = "font-family: monospace;" if t["mono"] else ""
     return f"""
 window.hello-window, window.hello-window > * {{ background: transparent; box-shadow: none; }}
@@ -411,7 +439,6 @@ window.hello-window, window.hello-window > * {{ background: transparent; box-sha
   color: {chrome}; {font}
 }}
 .hello-panel label, .hello-panel entry, .hello-panel text {{ {font} }}
-.hello-panel.closing {{ opacity: 0; transition: opacity 160ms ease-in; }}
 .hello-header {{ min-height: 60px; padding: 0 18px; color: {chrome}; }}
 {search_bar}
 .hello-search, .hello-search > text {{
@@ -431,7 +458,7 @@ window.hello-window, window.hello-window > * {{ background: transparent; box-sha
 {pane}
 .hello-list {{ background: transparent; color: {ink}; padding: 8px 8px; }}
 .hello-list row {{ background: transparent; padding: 0; border-radius: {t['row_radius']}px; outline: none;
-  transition: background-color 120ms ease-out; }}
+  transition: {select_transition}; }}
 .hello-list row.hello-row {{ min-height: {row_h}px; margin-bottom: 2px; }}
 {cards}
 .hello-list row.hello-row:hover {{ background-color: {rgba(ink, 0.05)}; }}
@@ -439,6 +466,10 @@ window.hello-window, window.hello-window > * {{ background: transparent; box-sha
   background-color: {t['selection']}; {sel_ink} {sel_extra}
 }}
 .hello-list row.selected .hello-subtitle, .hello-list row.selected .hello-accessory {{ {sel_ink} }}
+.hello-glide {{ background-color: {t['selection']}; border-radius: {t['row_radius']}px; {sel_extra} }}
+.hello-glide.cell {{ border-radius: {t['cell_radius']}px; }}
+.hello-glided row.selected, .hello-glided row.selected:hover, .hello-glided .hello-cell.selected,
+.hello-glided .hello-cell.selected:hover {{ background-color: transparent; box-shadow: none; border-color: transparent; }}
 .hello-list row.hello-section {{ padding: 10px 12px 2px 12px; min-height: 0; }}
 .hello-list row.hello-section.first {{ padding-top: 2px; }}
 .hello-section-label {{ {header} color: {faint}; }}
@@ -459,7 +490,7 @@ window.hello-window, window.hello-window > * {{ background: transparent; box-sha
 {icon_rest}
 {tile}
 .hello-empty {{ color: {faint}; font-size: 13px; }}
-.hello-cell {{ border-radius: {t['cell_radius']}px; padding: 10px 4px 8px 4px; transition: background-color 120ms; }}
+.hello-cell {{ border-radius: {t['cell_radius']}px; padding: 10px 4px 8px 4px; transition: {select_transition}; }}
 .hello-cell:hover {{ background-color: {rgba(ink, 0.05)}; }}
 .hello-cell-label {{ font-size: 12px; }}
 .hello-glyph {{ border-radius: {t['cell_radius'] // 2}px; font-size: 26px; min-height: 52px; min-width: 52px; }}
@@ -530,79 +561,193 @@ def markdown_css(t):
 """
 
 
-# Cascade des lignes à l'ouverture : départ et écart entre deux lignes (ms), par style. Glyphe a la sienne (décodage).
-ARRIVALS = {"kde": (40, 18), "glass": (110, 26), "atelier": (150, 34), "phosphor": (300, 46), "paper": (190, 30),
-            "brutal": (230, 42)}
+# Cascade des lignes à l'ouverture : départ et écart entre deux lignes (ms), par style (RevealStyle.row de la
+# version Mac). Glyphe a la sienne (décodage).
+ARRIVALS = {"kde": (40, 18), "glass": (40, 18), "atelier": (80, 35), "phosphor": (200, 45), "paper": (100, 30),
+            "brutal": (140, 30)}
 ARRIVAL_ROWS = 14
 
 
+def _amplitude():
+    return {"subtle": 0.45, "normal": 1.0, "expressive": 1.6}.get(settings.motionIntensity, 1.0)
+
+
 def reveal_css():
-    """Signature de mouvement de chaque style à l'ouverture (Motion.swift), en animations CSS GTK : le panneau, puis
-    les lignes en cascade (classes arrive-N posées par la fenêtre) et le pied de page. Les dessins (reflet, onde,
-    tube, encre…) sont dans mark.py."""
+    """Signature de mouvement de chaque style (Motion.swift), en animations CSS GTK aux ressorts de la version Mac :
+    l'ouverture du panneau, l'arrivée des lignes en cascade (classes arrive-N posées par la fenêtre) et du pied de
+    page, le changement d'écran (enter-forward / enter-back) et l'effacement quand on lance une app (closing).
+    Les ressorts sont échantillonnés en images clés (motion.keyframes) ; les dessins (reflet, onde, tube, encre…)
+    sont dans mark.py."""
     t = tokens()
     style = t["style"]
-    speed = 1 / motion_speed()
-    a = {"subtle": 0.45, "normal": 1.0, "expressive": 1.6}.get(settings.motionIntensity, 1.0)
+    speed = motion_speed()
+    k = _amplitude()
 
     def ms(v):
-        return f"{int(v * speed)}ms"
+        return f"{int(v / speed)}ms"
 
-    panel = {
-        "kde": (f"""from {{ opacity: 0; transform: translateY(-{10 * a:.0f}px) scale({1 - 0.015 * a:.4f}); }}
-  to {{ opacity: 1; transform: translateY(0) scale(1); }}""", 240, "cubic-bezier(0.2, 0.8, 0.2, 1)", "50% 0"),
-        "glass": (f"""0% {{ opacity: 0; transform: scale({1 - 0.06 * a:.4f}); filter: blur({8 * a:.1f}px); }}
-  55% {{ opacity: 1; transform: scale({1 + 0.006 * a:.4f}); filter: blur(0px); }}
-  100% {{ opacity: 1; transform: scale(1); filter: blur(0px); }}""", 480, "cubic-bezier(0.2, 0.9, 0.25, 1)", "50% 30px"),
-        # Le déploiement d'Atelier est une animation de hauteur (ressort, dans ui.py) : ici, un simple fondu.
-        "atelier": ("from { opacity: 0; } to { opacity: 1; }", 140, "ease-out", "50% 0"),
+    # Chaque animation : (bloc @keyframes, durée CSS déjà mise à la vitesse réglée, courbe).
+    def eased(name, frames, duration, easing):
+        return f"@keyframes {name} {{ {frames} }}", ms(duration), easing
+
+    def sprung(name, spring, frame, at_least=0.0):
+        block, duration = keyframes(name, spring, frame, at_least=at_least / speed)
+        return block, f"{duration}ms", "linear"
+
+    def fade(p):
+        return f"opacity: {clamp01(p):.3f};"
+
+    # Ouverture du panneau (RevealStyle.open et PanelReveal).
+    if style == "glass":
+        # Le verre grossit avec le ressort ; il doit être visible tout de suite, d'où un fondu à part, bien plus court.
+        opening = sprung("hello-reveal", Spring(0.46, 0.7), lambda p, s: (
+            f"opacity: {clamp01(s * speed / 0.1):.3f}; transform: scale({1 - 0.12 * k * (1 - p):.4f}); "
+            f"filter: blur({max(0.0, 8 * k * (1 - p)):.2f}px);"))
+        origin = "50% 7%"
+    elif style == "atelier":
+        # Le déploiement d'Atelier est aussi un ressort de hauteur (ui.py) ; ici l'échelle horizontale et le fondu.
+        opening = sprung("hello-reveal", Spring(0.44, 0.72), lambda p, s: (
+            f"{fade(p)} transform: translateY({-10 * k * (1 - p):.2f}px) scale({1 - 0.05 * k * (1 - p):.4f}, 1);"))
+        origin = "50% 0"
+    elif style == "phosphor":
         # Le Phosphore s'allume sous le dessin du tube (mark.py) : le panneau est là tout de suite.
-        "phosphor": ("from { opacity: 0; } to { opacity: 1; }", 70, "linear", "50% 50%"),
-        "paper": (f"""0% {{ opacity: 0; transform: perspective(900px) rotateX({-22 * a:.1f}deg) translateY(-{5 * a:.0f}px); }}
-  65% {{ opacity: 1; transform: perspective(900px) rotateX({1.4 * a:.2f}deg) translateY(0); }}
-  100% {{ opacity: 1; transform: perspective(900px) rotateX(0deg) translateY(0); }}""",
-                  540, "cubic-bezier(0.2, 0.8, 0.2, 1)", "50% 0"),
-        "glyph": (f"""from {{ opacity: 0; transform: scale({1 - 0.03 * a:.3f}) translateY({6 * a:.0f}px); }}
-  70% {{ opacity: 1; transform: scale({1 + 0.004 * a:.4f}) translateY(0); }}
-  to {{ opacity: 1; transform: scale(1) translateY(0); }}""", 420, "cubic-bezier(0.25, 1.2, 0.4, 1)", "50% 0"),
-    }
-    if style == "brutal":
-        # Il tombe de haut, s'écrase sur son ombre (qui se réduit presque à rien), rebondit puis se pose.
+        opening = eased("hello-reveal", "from { opacity: 0; } to { opacity: 1; }", 70, "linear")
+        origin = "50% 50%"
+    elif style == "paper":
+        opening = sprung("hello-reveal", Spring(0.48, 0.84), lambda p, s: (
+            f"{fade(p)} transform: perspective(900px) rotateX({-24 * k * (1 - p):.2f}deg) "
+            f"translateY({-6 * k * (1 - p):.2f}px);"))
+        origin = "50% 0"
+    elif style == "glyph":
+        opening = sprung("hello-reveal", Spring(0.46, 0.8), lambda p, s: (
+            f"{fade(p)} transform: translateY({6 * k * (1 - p):.2f}px) scale({1 - 0.03 * k * (1 - p):.4f});"))
+        origin = "50% 0"
+    elif style == "brutal":
+        # Il tombe de haut, s'écrase sur son ombre pleine (qui rentre presque toute au rebond), puis se pose.
         o, c = t["hard_shadow"] or 8, t.get("hard_shadow_color", "#000")
-        panel["brutal"] = (f"""0% {{ opacity: 0; transform: translate(-{8 * a:.0f}px, -{56 * a:.0f}px) rotate(-{1.6 * a:.2f}deg);
-       box-shadow: {o * 2.6:.0f}px {o * 2.6:.0f}px 0 0 {c}; }}
-  42% {{ opacity: 1; transform: translate({o * 0.7:.1f}px, {o * 0.7:.1f}px) rotate(0deg); box-shadow: {o * 0.3:.1f}px {o * 0.3:.1f}px 0 0 {c}; }}
-  62% {{ transform: translate(-{2 * a:.1f}px, -{3 * a:.1f}px) rotate(0deg); box-shadow: {o * 1.3:.1f}px {o * 1.3:.1f}px 0 0 {c}; }}
-  80% {{ transform: translate({1 * a:.1f}px, {1 * a:.1f}px) rotate(0deg); box-shadow: {o * 0.85:.1f}px {o * 0.85:.1f}px 0 0 {c}; }}
-  100% {{ opacity: 1; transform: translate(0, 0) rotate(0deg); box-shadow: {o}px {o}px 0 0 {c}; }}""",
-                           440, "cubic-bezier(0.4, 0, 0.3, 1)", "50% 50%")
-    rows = {
-        "kde": (f"from {{ opacity: 0; transform: translateY(-{4 * a:.1f}px); }} to {{ opacity: 1; transform: translateY(0); }}",
-                220, "ease-out"),
-        "glass": (f"""from {{ opacity: 0; transform: translateY({8 * a:.1f}px) scale({1 - 0.015 * a:.4f}); }}
-  to {{ opacity: 1; transform: translateY(0) scale(1); }}""", 360, "cubic-bezier(0.2, 0.9, 0.25, 1)"),
-        "atelier": (f"""from {{ opacity: 0; transform: translateY({16 * a:.1f}px); }}
-  70% {{ opacity: 1; transform: translateY(-{2 * a:.1f}px); }} to {{ opacity: 1; transform: translateY(0); }}""",
-                    420, "cubic-bezier(0.3, 1, 0.4, 1)"),
-        # Phosphore : chaque ligne s'allume d'un coup, au passage du faisceau.
-        "phosphor": ("0% { opacity: 0; } 50% { opacity: 0; } 51% { opacity: 1; } 100% { opacity: 1; }", 90, "linear"),
-        "paper": (f"from {{ opacity: 0; transform: translateY(-{3 * a:.1f}px); }} to {{ opacity: 1; transform: translateY(0); }}",
-                  300, "ease-out"),
-        "brutal": (f"""from {{ opacity: 0; transform: translateY({10 * a:.1f}px) scale({1 - 0.06 * a:.3f}); }}
-  60% {{ opacity: 1; transform: translateY(-{2 * a:.1f}px) scale({1 + 0.02 * a:.3f}); }}
-  to {{ opacity: 1; transform: translateY(0) scale(1); }}""", 280, "ease-out"),
-    }
-    frames, duration, easing, origin = panel.get(style, panel["kde"])
-    out = [f"@keyframes hello-reveal {{ {frames} }}",
-           f".hello-panel.reveal {{ animation: hello-reveal {ms(duration)} {easing}; transform-origin: {origin}; }}",
-           "@keyframes hello-reveal-light { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: scale(1); } }",
-           f".hello-panel.reveal-light {{ animation: hello-reveal-light {ms(140)} ease-out; }}"]
-    if style in rows:
-        frames, duration, easing = rows[style]
+
+        def slam(p, s):
+            shadow = o * (1 + 1.6 * (1 - p)) if p < 1 else o * max(0.2, 1 - 4 * (p - 1))
+            return (f"{fade(p)} transform: translateY({-48 * k * (1 - p):.2f}px) scale({1 + 0.04 * k * (1 - p):.4f}) "
+                    f"rotate({-1.5 * k * (1 - p):.3f}deg); box-shadow: {shadow:.1f}px {shadow:.1f}px 0 0 {c};")
+        opening = sprung("hello-reveal", Spring(0.36, 0.5), slam)
+        origin = "50% 50%"
+    else:   # KDE : comme un menu de Plasma, vif et sans rebond.
+        opening = sprung("hello-reveal", Spring(0.38, 0.86), lambda p, s: (
+            f"{fade(p)} transform: translateY({-10 * k * (1 - p):.2f}px) scale({1 - 0.015 * k * (1 - p):.4f});"))
+        origin = "50% 0"
+    block, length, easing = opening
+    out = [twin(block, "hello-reveal"), f".hello-panel.reveal {{ animation: hello-reveal {length} {easing} both; "
+                                        f"transform-origin: {origin}; }}",
+           ".hello-panel.reveal.again { animation-name: hello-reveal-b; }"]
+    # Réouverture rapide (le Verre) : un petit ressort vif.
+    block, length, _ = sprung("hello-reveal-light", snappy(0.14), lambda p, s: (
+        f"{fade(p * 1.4)} transform: scale({1 - 0.01 * (1 - p):.4f});"))
+    out += [twin(block, "hello-reveal-light"), f".hello-panel.reveal-light {{ animation: hello-reveal-light {length} linear both; }}",
+            ".hello-panel.reveal-light.again { animation-name: hello-reveal-light-b; }"]
+
+    # Arrivée des lignes (RevealStyle.row et RevealItem).
+    rows = None
+    if style == "kde":
+        rows = sprung("hello-arrive", Spring(0.3, 0.88), lambda p, s: (
+            f"{fade(p)} transform: translateY({-4 * k * (1 - p):.2f}px);"))
+    elif style == "glass":
+        rows = sprung("hello-arrive", Spring(0.28, 0.8), lambda p, s: (
+            f"{fade(p)} transform: translateY({10 * k * (1 - p):.2f}px);"))
+    elif style == "atelier":
+        rows = sprung("hello-arrive", Spring(0.5, 0.72), lambda p, s: (
+            f"{fade(p)} transform: translateY({18 * k * (1 - p):.2f}px) scale({1 - 0.06 * k * (1 - p):.4f});"))
+    elif style == "phosphor":
+        # Une ligne après l'autre, sans fondu : comme un terminal qui affiche sa sortie.
+        rows = eased("hello-arrive", "0% { opacity: 0; } 99% { opacity: 0; } 100% { opacity: 1; }", 30, "linear")
+    elif style == "paper":
+        rows = eased("hello-arrive", f"from {{ opacity: 0; transform: translateX({-10 * k:.1f}px); }} "
+                                     "to { opacity: 1; transform: translateX(0); }", 340, "ease-out")
+    elif style == "brutal":
+        rows = sprung("hello-arrive", Spring(0.32, 0.5), lambda p, s: (
+            f"{fade(p)} transform: translateY({14 * k * (1 - p):.2f}px) scale({1 - 0.15 * k * (1 - p):.4f});"))
+    if rows:
+        block, length, easing = rows
         first, step = ARRIVALS[style]
-        out += [f"@keyframes hello-arrive {{ {frames} }}",
-                f".hello-row.arrive, .hello-section.arrive, .hello-footer.arrive "
-                f"{{ animation: hello-arrive {ms(duration)} {easing} both; }}"]
+        out += [twin(block, "hello-arrive"), f".hello-row.arrive, .hello-section.arrive, .hello-footer.arrive "
+                                             f"{{ animation: hello-arrive {length} {easing} both; transform-origin: 50% 0; }}",
+                ".hello-footer.arrive.again { animation-name: hello-arrive-b; }"]
         out += [f".arrive-{i} {{ animation-delay: {ms(first + i * step)}; }}" for i in range(ARRIVAL_ROWS)]
         out.append(f".hello-footer.arrive {{ animation-delay: {ms(first + 6 * step)}; }}")
+
+    # Changement d'écran (RevealStyle.navigation et modeTransition) : le nouvel écran arrive du côté où l'on va.
+    for side, sign in (("forward", 1), ("back", -1)):
+        name = f"hello-enter-{side}"
+        if style == "glass":
+            entry = sprung(name, snappy(0.24), lambda p, s, d=sign: (
+                f"{fade(p)} transform: translateX({36 * k * d * (1 - p):.2f}px);"))
+        elif style == "atelier":
+            entry = sprung(name, Spring(0.38, 0.86), lambda p, s, d=sign: (
+                f"{fade(p)} transform: translateX({30 * k * d * (1 - p):.2f}px) scale({1 - 0.02 * (1 - p):.4f});"))
+        elif style == "glyph":
+            entry = sprung(name, Spring(0.36, 0.82), lambda p, s, d=sign: (
+                f"{fade(p)} transform: translateX({22 * k * d * (1 - p):.2f}px);"))
+        elif style == "phosphor":
+            entry = eased(name, "from { opacity: 0; } to { opacity: 1; }", 60, "linear")
+        elif style == "paper":
+            entry = eased(name, f"from {{ opacity: 0; transform: translateY({8 * k:.1f}px); }} "
+                                "to { opacity: 1; transform: translateY(0); }", 260, "ease-in-out")
+        elif style == "brutal":
+            entry = sprung(name, Spring(0.3, 0.62), lambda p, s, d=sign: (
+                f"{fade(p)} transform: translateX({60 * k * d * (1 - p):.2f}px);"))
+        else:
+            entry = sprung(name, Spring(0.3, 0.9), lambda p, s, d=sign: (
+                f"{fade(p)} transform: translateX({24 * k * d * (1 - p):.2f}px);"))
+        block, length, easing = entry
+        out += [twin(block, name), f".hello-screen.enter-{side} {{ animation: {name} {length} {easing} both; }}",
+                f".hello-screen.enter-{side}.again {{ animation-name: {name}-b; }}"]
+
+    # Effacement quand on lance une app (RevealStyle.close) ; le panneau s'efface en même temps (0,22 s, easeIn).
+    fade_out = 0.22
+    if style == "glass" or style == "kde":
+        closing = eased("hello-close", "from { transform: scale(1); } to { transform: scale(0.985); }", 220, "ease-out")
+    elif style == "atelier":
+        closing = sprung("hello-close", Spring(0.24, 0.6), lambda p, s: f"transform: scale({1 + 0.02 * k * p:.4f});",
+                         at_least=fade_out)
+    elif style == "glyph":
+        closing = sprung("hello-close", Spring(0.2, 0.9), lambda p, s: f"transform: scale({1 - 0.025 * k * p:.4f});",
+                         at_least=fade_out)
+    elif style == "phosphor":
+        # L'écran s'écrase en trait lumineux.
+        closing = eased("hello-close", "from { transform: scale(1, 1); filter: brightness(1); } "
+                                       "to { transform: scale(0.6, 0.006); filter: brightness(1.7); }", 160, "ease-in")
+    elif style == "paper":
+        closing = eased("hello-close", "from { transform: perspective(900px) rotateX(0deg) translateY(0); } "
+                                       f"to {{ transform: perspective(900px) rotateX({10 * k:.1f}deg) "
+                                       f"translateY({-8 * k:.1f}px); }}", 200, "ease-in")
+    else:   # Néo-brutal : il s'enfonce sur son ombre pleine, comme un bouton qu'on presse.
+        o, c = t["hard_shadow"] or 8, t.get("hard_shadow_color", "#000")
+        closing = sprung("hello-close", Spring(0.16, 0.7), lambda p, s: (
+            f"transform: translate({6 * p:.2f}px, {6 * p:.2f}px); box-shadow: {o - 6 * p:.1f}px {o - 6 * p:.1f}px 0 0 {c};"),
+            at_least=fade_out)
+    block, length, easing = closing
+    out += [block, f".hello-panel.closing {{ animation: hello-close {length} {easing} both; transform-origin: 50% 50%; }}",
+            "@keyframes hello-fade-out { from { opacity: 1; } to { opacity: 0; } }",
+            f".hello-fading {{ animation: hello-fade-out {ms(fade_out * 1000)} ease-in both; }}"]
     return "\n".join(out) + "\n"
+
+
+def twin(block, name):
+    """Les images clés `name`, et leur jumelle `name-b` : passer de l'une à l'autre (classe again) relance une
+    animation CSS dans la même image, sans attendre un tour de boucle (qui laisserait passer une image figée)."""
+    return block + "\n" + block.replace(f"@keyframes {name} ", f"@keyframes {name}-b ", 1)
+
+
+def replay(widget, name, others=()):
+    """Pose la classe d'animation `name` sur `widget` et la (re)lance tout de suite (voir twin)."""
+    for other in others:
+        widget.remove_css_class(other)
+    if widget.has_css_class(name):
+        (widget.remove_css_class if widget.has_css_class("again") else widget.add_css_class)("again")
+    else:
+        widget.add_css_class(name)
+
+
+def close_duration():
+    """Durée de l'effacement au lancement (ms) : le panneau est masqué ensuite."""
+    return round(220 / motion_speed())

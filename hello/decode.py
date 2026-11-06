@@ -4,8 +4,6 @@ Le titre se décode à sa place, de gauche à droite : chaque lettre monte en de
 glyphes puis se fige. L'icône se décode de même, sous une trame de cases, en diagonale depuis le coin haut gauche."""
 import time
 
-from gi.repository import GLib
-
 RAMP = ".:-=+*#%@"
 GLYPHS = "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789#%&*+=?/"
 MASK = 0xFFFFFFFFFFFFFFFF
@@ -56,14 +54,20 @@ def wave_delay(order):
 
 
 class Decoder:
-    """Anime les labels et les trames d'icônes en cours de décodage, sur un seul minuteur (~30 images/s)."""
+    """Anime les labels, les trames d'icônes et les fondus ASCII en cours, sur l'horloge d'affichage de la fenêtre
+    (une image par rafraîchissement de l'écran ; un minuteur de 16 ms tant qu'elle n'est pas affichée)."""
 
     def __init__(self, speed=lambda: 1.0):
+        from .motion import Ticker
         self.speed = speed
         self._labels = {}   # label -> (texte, début, durée)
         self._covers = {}   # zone de dessin -> (début, durée)
         self._fades = {}    # fondu ASCII -> (début, tenue, durée)
-        self._source = None
+        self._ticker = Ticker(self._tick)
+
+    def attach(self, widget):
+        """La fenêtre dont l'horloge d'affichage cadence les animations."""
+        self._ticker.attach(widget)
 
     def text(self, label, text, delay=0.0, quick=False):
         """Décode `text` dans `label`, après `delay` secondes."""
@@ -103,8 +107,7 @@ class Decoder:
         self._fades.clear()
 
     def _run(self):
-        if self._source is None:
-            self._source = GLib.timeout_add(33, self._tick)
+        self._ticker.start()
 
     def _tick(self):
         now = time.monotonic()
@@ -114,7 +117,10 @@ class Decoder:
                 label.set_label(text)
                 del self._labels[label]
             elif progress >= 0:
-                label.set_label(frame(text, progress))
+                # Le texte ne change qu'au rythme du décodage : inutile de remettre le label en page à chaque image.
+                shown = frame(text, progress)
+                if shown != label.get_label():
+                    label.set_label(shown)
         for cover, (start, length) in list(self._covers.items()):
             cover.progress = min(1.0, max(0.0, (now - start) / length))
             cover.queue_draw()
@@ -136,10 +142,7 @@ class Decoder:
             else:
                 fader.apply(0.0)
                 del self._fades[fader]
-        if not self._labels and not self._covers and not self._fades:
-            self._source = None
-            return False
-        return True
+        return bool(self._labels or self._covers or self._fades)
 
 
 def draw_cover(ctx, width, height, progress, background, ink):
