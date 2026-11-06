@@ -130,6 +130,23 @@ def bench():
         renderer.render_texture(snapshot.to_node(), bounds).save_to_png(path)
         renderer.unrealize()
 
+    def selection_gap():
+        """Écart (px, pire bord) entre le surlignage qui glisse et l'élément choisi, une fois posé."""
+        w = app.window
+        root = w.get_child()
+        glides = [g for g in [w.glide, *w._page_glides] if g is not None and g._target is not None]
+        worst = None
+        for glide in glides:
+            if not glide.highlight.get_child_visible():
+                continue
+            ok1, a = glide.highlight.compute_bounds(root)
+            ok2, b = glide._target.compute_bounds(root)
+            if ok1 and ok2:
+                gap = max(abs(a.get_x() - b.get_x()), abs(a.get_y() - b.get_y()),
+                          abs(a.get_width() - b.get_width()), abs(a.get_height() - b.get_height()))
+                worst = gap if worst is None else max(worst, gap)
+        return worst
+
     def key(keyval):
         app.model.key(keyval, Gdk.ModifierType(0), False)
 
@@ -155,6 +172,9 @@ def bench():
             return False
 
         def stop():
+            gap = selection_gap()
+            if gap is not None and gap > 0.5:
+                print(f"✗ {name} : surlignage décalé de {gap:.1f} px par rapport à la ligne choisie", flush=True)
             results.append((name, recording["frames"], recording["actions"], recording["stall"]))
             recording["name"] = None
             GLib.timeout_add(250, step)

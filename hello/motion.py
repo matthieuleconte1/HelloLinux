@@ -145,7 +145,13 @@ def _translate(x, y):
 
 class Glide(Gtk.Widget):
     """Un surlignage qui glisse sous l'élément choisi (ligne de la liste, case de la grille), avec le ressort du
-    style (matchedGeometryEffect). Il est dessiné avant le contenu : le texte de la ligne reste au-dessus."""
+    style (matchedGeometryEffect). Il est dessiné avant le contenu : le texte de la ligne reste au-dessus.
+
+    Une animation CSS de la ligne (arrivée à l'ouverture, changement d'écran) la déplace sans remettre Glide en page :
+    après chaque sélection ou mise en page, le surlignage suit donc la ligne image par image, tant qu'elle bouge (il
+    arrive avec elle, comme le fond de ligne de la version Mac), puis s'arrête pour ne pas réveiller l'app à vide."""
+
+    FOLLOW_IDLE = 0.8   # s sans mouvement de la ligne avant d'arrêter de la suivre
 
     def __init__(self, child, css="hello-glide"):
         super().__init__()
@@ -162,10 +168,41 @@ class Glide(Gtk.Widget):
         self._progress = 1.0
         self._animation = None
         self.spring = None           # None : saut net
+        self._follow = None          # rappel d'image qui suit la ligne
+        self._seen = None
+        self._still = 0.0
+        self.connect("map", lambda *_: self._watch())
+        self.connect("unmap", lambda *_: self._unwatch())
         self.set_hexpand(child.get_hexpand())
         self.set_vexpand(child.get_vexpand())
 
+    def _watch(self):
+        """Suivre la ligne choisie à chaque image, jusqu'à ce qu'elle ne bouge plus (FOLLOW_IDLE)."""
+        self._still = 0.0
+        if self._follow is None and self.get_mapped() and self._target is not None:
+            self._follow = self.add_tick_callback(self._on_frame)
+
+    def _unwatch(self):
+        if self._follow is not None:
+            self.remove_tick_callback(self._follow)
+            self._follow = None
+
+    def _on_frame(self, _widget, clock):
+        now = clock.get_frame_time() / 1e6
+        rect = self._bounds(self._target)
+        if rect != self._seen:
+            self._seen = rect
+            self._still = now
+            self.queue_allocate()
+        elif not self._still:
+            self._still = now
+        elif now - self._still > self.FOLLOW_IDLE or self._target is None:
+            self._follow = None
+            return False
+        return True
+
     def do_dispose(self):
+        self._unwatch()
         for widget in (self.highlight, self.child):
             if widget.get_parent() is self:
                 widget.unparent()
@@ -180,7 +217,9 @@ class Glide(Gtk.Widget):
     def _bounds(self, widget):
         if widget is None or widget.get_parent() is None:
             return None
-        ok, rect = widget.compute_bounds(self.child)
+        # Dans le repère de Glide, celui où le surlignage est placé (celui de l'enfant commence après ses marges et
+        # son padding : 8 px de décalage pour la liste).
+        ok, rect = widget.compute_bounds(self)
         if not ok or rect.get_width() <= 0:
             return None
         return (rect.get_x(), rect.get_y(), rect.get_width(), rect.get_height())
@@ -195,6 +234,7 @@ class Glide(Gtk.Widget):
              else self.highlight.remove_css_class)(name)
         if same:
             return
+        self._watch()
         target = self._bounds(widget)
         if target is None or self._shown is None or not animate or self.spring is None or not motion_enabled():
             self._snap(target)
@@ -238,8 +278,12 @@ class Glide(Gtk.Widget):
         self.child.allocate(width, height, baseline, None)
         # La cible a bougé sans changer (liste refaite, panneau agrandi) : le surlignage la suit sans animation.
         target = self._bounds(self._target)
-        if target != self._to and not playing(self._animation):
-            self._from = self._to = target
+        if target != self._to:
+            if playing(self._animation):
+                self._to = target            # le glissement en cours vise la nouvelle position
+            else:
+                self._from = self._to = target
+            self._watch()
         rect = self._current()
         self._shown = rect
         self.highlight.set_child_visible(rect is not None)
