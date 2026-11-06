@@ -62,6 +62,7 @@ class Decoder:
         self.speed = speed
         self._labels = {}   # label -> (texte, début, durée)
         self._covers = {}   # zone de dessin -> (début, durée)
+        self._fades = {}    # fondu ASCII -> (début, tenue, durée)
         self._source = None
 
     def text(self, label, text, delay=0.0, quick=False):
@@ -80,14 +81,26 @@ class Decoder:
         cover.queue_draw()
         self._run()
 
+    def fade(self, fader, delay=0.0, quick=False):
+        """Grilles (apps, emoji) : l'élément apparaît d'abord en ASCII, puis passe en fondu à l'image réelle
+        (AsciiFade de Motion.swift) : une tenue brève, puis un seul fondu d'opacité."""
+        speed = self.speed()
+        self._fades[fader] = (time.monotonic() + delay, (0.05 if quick else 0.1) / speed, (0.2 if quick else 0.3) / speed)
+        if fader.cells:
+            fader.apply(1.0)
+        self._run()
+
     def cancel(self):
         for label, (text, _, _) in self._labels.items():
             label.set_label(text)
         for cover in self._covers:
             cover.progress = 1.0
             cover.queue_draw()
+        for fader in self._fades:
+            fader.apply(0.0)
         self._labels.clear()
         self._covers.clear()
+        self._fades.clear()
 
     def _run(self):
         if self._source is None:
@@ -107,7 +120,23 @@ class Decoder:
             cover.queue_draw()
             if cover.progress >= 1:
                 del self._covers[cover]
-        if not self._labels and not self._covers:
+        for fader, (start, hold, length) in list(self._fades.items()):
+            elapsed = now - start
+            if not fader.cells:
+                # Version ASCII pas encore prête : passé le repère, rien à rattraper (l'image reste affichée).
+                if elapsed > hold + 0.15:
+                    fader.apply(0.0)
+                    del self._fades[fader]
+                continue
+            if elapsed < hold:
+                fader.apply(1.0)
+            elif elapsed < hold + length:
+                p = (elapsed - hold) / length
+                fader.apply((1 - p) ** 2)      # ease-out de l'image : l'ASCII s'efface vite puis se pose
+            else:
+                fader.apply(0.0)
+                del self._fades[fader]
+        if not self._labels and not self._covers and not self._fades:
             self._source = None
             return False
         return True

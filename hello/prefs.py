@@ -7,12 +7,12 @@ import uuid
 
 from gi.repository import Adw, Gdk, GLib, GObject, Gtk
 
-from . import __version__, desktop, engines, updater
+from . import __version__, desktop, engines, icontrace, updater
 from .agent import LEVELS, Hermes
 from .chats import ChatStore
 from .hotkey import CHOICES
 from .mark import cairo_rgba
-from .settings import PANEL_SIZES, ROW_DENSITY, settings
+from .settings import PANEL_SIZES, ROW_DENSITY, glyph_appearance, settings
 from .styles import APPEARANCES, BRUTAL, GLYPH_ACCENTS, GLYPH_APPEARANCES, PALETTES, PAPER, PHOSPHOR, STYLES, tokens
 from .updater import Updater
 
@@ -441,14 +441,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         if options:
             page.add(group(f"Couleurs · {info['title']}", *options))
         if style == "glyph":
-            hours = [(h, f"{h} h") for h in range(24)]
-            page.add(group(
-                "Nuit",
-                switch("glyphAutoNight", "Passer en Nuit aux heures choisies", icon="hello-night-symbolic"),
-                combo("glyphNightStart", "À partir de", hours),
-                combo("glyphNightEnd", "Jusqu'à", hours),
-                spin("glyphNightLevel", "Luminosité du rouge", 0.4, 1, 0.05, 2),
-                description="Rouge sur noir, pour la nuit. Rempli : sélectionné ; au trait : disponible."))
+            page.add(self._night_group())
 
         page.add(group(
             "Panneau",
@@ -473,6 +466,40 @@ class SettingsWindow(Adw.ApplicationWindow):
             self._later("appearance", "motion")
         page.add(group(None, button_row("Rétablir l'apparence d'origine", reset)))
         return page
+
+    def _night_group(self):
+        """Réglages de la Nuit d'Atelier Glyphe ; ceux des icônes se grisent quand ils ne s'appliquent pas."""
+        hours = [(h, f"{h} h") for h in range(24)]
+        auto = switch("glyphAutoNight", "Passer en Nuit aux heures choisies", icon="hello-night-symbolic")
+        level = spin("glyphNightLevel", "Luminosité du rouge", 0.4, 1, 0.05, 2)
+        outline = switch("glyphNightOutline", "Contour des icônes")
+        edges = switch("glyphNightEdges", "Traits intérieurs, détourés automatiquement")
+        detail = slider("glyphNightEdgeDetail", "Détail des traits", 0, 1, [(0, "Grandes formes"), (1, "Tout")])
+        opacity = slider("glyphNightIconOpacity", "Opacité des icônes", 0, 1, [(0, "Trait seul"), (1, "Pleine")])
+        colors = switch("glyphNightIconColors", "Garder les couleurs des icônes")
+        if not icontrace.available():
+            outline.set_subtitle("Demande numpy (python-numpy)")
+
+        def update(*_):
+            night_off = (glyph_appearance() != "night" and not settings.glyphAutoNight
+                         and settings.glyphAppearance != "night")
+            drawn = icontrace.available() and settings.glyphNightOutline
+            level.set_sensitive(not night_off)
+            outline.set_sensitive(not night_off and icontrace.available())
+            edges.set_sensitive(not night_off and drawn)
+            detail.set_sensitive(not night_off and drawn and settings.glyphNightEdges)
+            opacity.set_sensitive(not night_off)
+            colors.set_sensitive(not night_off)
+        for row in (auto, outline, edges):
+            row.connect("notify::active", update)
+        update()
+        return group(
+            "Nuit", auto, combo("glyphNightStart", "À partir de", hours), combo("glyphNightEnd", "Jusqu'à", hours),
+            level, outline, edges, detail, opacity, colors,
+            description="Rouge sur noir. La ligne choisie est cernée, ce qu'elle contient se remplit. Les icônes "
+                        "d'apps sont dessinées au trait (contours détectés automatiquement) sur leur couleur "
+                        "atténuée, et reprennent leur pleine couleur une fois choisies. Horaire vérifié à chaque "
+                        "ouverture.")
 
     def _style_options(self, style):
         """Les réglages propres au style choisi."""

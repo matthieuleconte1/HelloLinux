@@ -158,7 +158,9 @@ def glyph_tokens(choice, appearance):
     dark = appearance == "dark" or (appearance == "auto" and system_is_dark())
     frame, on_frame = "#050403", "#FFFFFF"
     ink = on_frame if dark else "#111111"
-    selection, selection_ink = ("#F1F1F1", "#111111") if dark else ("#080604", "#FFFFFF")
+    # Sombre : le panneau se détache du cadre d'un cran (assez pour lire la profondeur, sans griser le noir),
+    # sélection en blanc cassé chaud plutôt qu'un blanc pur qui éblouit dans le noir.
+    selection, selection_ink = ("#ECE9E4", "#111111") if dark else ("#080604", "#FFFFFF")
     _, accent, on_accent = GLYPH_ACCENTS.get(choice, GLYPH_ACCENTS["orange"])
     # Mono : l'accent se confond avec la sélection, la pastille choisie s'inverse plutôt.
     mono = accent is None
@@ -167,14 +169,14 @@ def glyph_tokens(choice, appearance):
     # Logo et touche ↵ sont posés sur le cadre noir : Mono y passe en blanc.
     frame_accent = on_frame if mono else accent
     return dict(
-        style="glyph", dark=dark, surface=frame, pane="#080604" if dark else "#EFEEEC", card=None, ink=ink,
+        style="glyph", dark=dark, surface=frame, pane="#100E0C" if dark else "#EFEEEC", card=None, ink=ink,
         chrome_ink=on_frame, accent=accent, accent2=accent, toast=on_frame, selection=selection,
         selection_ink=selection_ink, radius=22, row_radius=12, cell_radius=14, border=None, hard_shadow=None,
         divider="transparent", font=GLYPH_FONT, display_font=GLYPH_DISPLAY, title_font=None, title_weight=600,
         header="label", key_fill=rgba("#FFFFFF", 0.07), key_ink=rgba("#FFFFFF", 0.62),
         key_border=rgba("#FFFFFF", 0.14), primary_key=(frame_accent, "#050403" if mono else on_accent),
-        mono_keys=True, pane_border=rgba("#FFFFFF", 0.10) if dark else None,
-        tile=("glyph", "#242424" if dark else "#E7E5E2", ink, selection_ink if mono else accent,
+        mono_keys=True, pane_border=rgba("#FFFFFF", 0.08) if dark else None, strong_meta=dark,
+        tile=("glyph", "#262421" if dark else "#E7E5E2", ink, selection_ink if mono else accent,
               selection if mono else on_accent, None),
         mark=("glyph", on_frame, frame_accent), search_bar=False, mono=False, ascii=True)
 
@@ -182,19 +184,29 @@ def glyph_tokens(choice, appearance):
 def glyph_night(level):
     """La Nuit de l'artifact : une seule teinte, alors la forme prend le relais de la couleur.
     Rempli = choisi · trait plein = disponible · pointillé = secondaire · décalage du trait = hauteur.
-    Pas de lueur ni d'ombre floue : la seule lumière est ce rouge, à la luminosité réglée."""
+    Pas de lueur ni d'ombre floue : la seule lumière est ce rouge, à la luminosité réglée.
+    La ligne choisie est cernée (un bloc rouge plein éblouit dans le noir) ; ce qu'elle contient se remplit :
+    pastille rouge, icône en couleur pleine aux traits gravés. Les icônes d'apps sont dessinées au trait
+    (icontrace.py) sur leur couleur atténuée."""
     level = min(max(level, 0.4), 1.0)
     red = "#%02X%02X%02X" % (round(255 * level), round(80 * level), round(60 * level))
     line = "rgba(255,60,40,0.58)"
+    outline = bool(settings.glyphNightOutline)
+    opacity = min(max(float(settings.glyphNightIconOpacity), 0.0), 1.0)
     return dict(
         style="glyph", night=True, dark=True, surface="#000000", pane="#000000", card=None, ink=red, chrome_ink=red,
-        accent=red, accent2=red, toast=red, selection=red, selection_ink="#000000", radius=22, row_radius=12,
+        accent=red, accent2=red, toast=red, selection="rgba(255,60,40,0.10)", selection_ink=None,
+        selection_extra=f"box-shadow: inset 0 0 0 1.5px {red};", radius=22, row_radius=12,
         cell_radius=14, border=(line, 1), hard_shadow=6, hard_shadow_color="rgba(255,60,40,0.36)",
         divider="transparent", font=GLYPH_FONT, display_font=GLYPH_DISPLAY, title_font=None, title_weight=500,
         header="label", key_fill="transparent", key_ink=red, key_border=line, primary_key=(red, "#000000"),
         mono_keys=True, pane_border=line, chrome_caps=True, section_rule="rgba(255,60,40,0.32)", launch_tint=red,
-        tile=("glyph", "transparent", red, "#000000", red, line), icon_filter="red",
-        mark=("glyph", red, red), search_bar=False, mono=False, ascii=True)
+        tile=("glyph", "transparent", red, red, "#000000", line), strong_meta=True,
+        icon_filter=None if settings.glyphNightIconColors else "red",
+        # Sans contour, une icône à 0 % disparaîtrait.
+        icon_opacity=opacity if outline else max(opacity, 0.1), icon_outline=outline,
+        icon_edges=float(settings.glyphNightEdgeDetail) if settings.glyphNightEdges else None,
+        monochrome=red, mark=("glyph", red, red), search_bar=False, mono=False, ascii=True)
 
 
 def tokens(style=None):
@@ -362,6 +374,21 @@ def css():
         hue = {"green": 95, "amber": 5, "cyan": 150}.get(settings.phosphorColor)
         icon_filter = (f".hello-appicon {{ filter: grayscale(1) sepia(1) saturate(5) hue-rotate({hue}deg); }}" if hue
                        else ".hello-appicon { filter: grayscale(1) brightness(1.15); }")
+    # La Nuit : icônes atténuées au repos, pleines sur l'élément choisi ; leur dessin au trait à l'encre, gravé en
+    # noir dans l'icône choisie quand elle est teinte en rouge.
+    icon_rest = ""
+    if t.get("icon_opacity", 1.0) < 1.0:
+        o = t["icon_opacity"]
+        icon_rest = (f".hello-appicon, .hello-tile {{ opacity: {o:.2f}; transition: opacity 150ms ease-out; }}"
+                     ".hello-list row.selected .hello-appicon, .hello-cell.selected .hello-appicon, "
+                     ".hello-cell:hover .hello-appicon, .hello-list row.selected .hello-tile { opacity: 1; }")
+    engraved = "rgba(0,0,0,0.85)" if t.get("icon_filter") else ink
+    icon_rest += (f".hello-outline {{ color: {ink}; }}"
+                  f".hello-list row.selected .hello-outline, .hello-cell.selected .hello-outline, "
+                  f".hello-cell:hover .hello-outline {{ color: {engraved}; }}"
+                  f".hello-asciifade {{ color: {ink}; }}"
+                  f".hello-cell.selected .hello-asciifade, gridview.hello-glyphs > child:selected .hello-asciifade "
+                  f"{{ color: {t.get('selection_ink') or ink}; }}")
     search_bar = ""
     if t["search_bar"]:
         search_bar = (f".hello-header {{ background: {t['card']}; border-radius: 999px; margin: 7px 8px; "
@@ -417,7 +444,8 @@ window.hello-window, window.hello-window > * {{ background: transparent; box-sha
 .hello-section-label {{ {header} color: {faint}; }}
 .hello-title {{ font-size: {13.5 * scale:.1f}px; font-weight: {t['title_weight']}; {title_font} }}
 .hello-subtitle {{ font-size: {11.5 * scale:.1f}px; color: {soft}; }}
-.hello-accessory {{ font-size: 11px; color: {soft if t['style'] in ('brutal', 'atelier') else faint}; }}
+.hello-accessory {{ font-size: 11px; color: {soft if t['style'] in ('brutal', 'atelier') or t.get('strong_meta') else faint};
+  {'font-weight: 500;' if t.get('strong_meta') else ''} }}
 .hello-check {{ color: {t['accent']}; }}
 .hello-tile {{ border-radius: 7px; background: {rgba(ink, 0.08)}; }}
 .hello-footer {{ min-height: 40px; padding: 0 16px; font-size: 12px; color: {chrome}; }}
@@ -428,6 +456,7 @@ window.hello-window, window.hello-window > * {{ background: transparent; box-sha
   border-radius: 5px; padding: 1px 6px; font-size: 11px; font-weight: 600; min-width: 12px; {key_font} }}
 {primary_key}
 {icon_filter}
+{icon_rest}
 {tile}
 .hello-empty {{ color: {faint}; font-size: 13px; }}
 .hello-cell {{ border-radius: {t['cell_radius']}px; padding: 10px 4px 8px 4px; transition: background-color 120ms; }}
@@ -436,7 +465,8 @@ window.hello-window, window.hello-window > * {{ background: transparent; box-sha
 .hello-glyph {{ border-radius: {t['cell_radius'] // 2}px; font-size: 26px; min-height: 52px; min-width: 52px; }}
 .hello-glyph:hover {{ background-color: {rgba(ink, 0.06)}; }}
 gridview.hello-glyphs, gridview.hello-glyphs > child {{ background: transparent; color: {ink}; padding: 0; }}
-gridview.hello-glyphs > child:selected {{ background-color: {t['selection']}; border-radius: {t['cell_radius'] // 2}px; {sel_ink} }}
+gridview.hello-glyphs > child:selected {{ background-color: {t['selection']}; border-radius: {t['cell_radius'] // 2}px; {sel_ink}
+  {t.get('selection_extra', '')} }}
 .hello-filter button {{ font-size: 11px; padding: 2px 9px; min-height: 22px; min-width: 0; border-radius: 999px; border: none;
   background: {rgba(chrome, 0.08)}; color: {rgba(chrome, 0.75)}; box-shadow: none; }}
 .hello-filter button:checked {{ background: {t['accent']}; color: {'#111' if t['style'] != 'glass' else '#fff'}; }}
@@ -468,6 +498,35 @@ gridview.hello-glyphs > child:selected {{ background-color: {t['selection']}; bo
 .hello-dot.active {{ background: {ink}; }}
 scrollbar {{ background: transparent; border: none; }}
 scrollbar slider {{ background: {rgba(ink, 0.25)}; min-width: 4px; }}
+{markdown_css(t)}"""
+
+
+def markdown_css(t):
+    """Réponses de l'IA (ui_markdown.py) : titres, listes, citations, code, tableaux, formules, liens."""
+    ink = t["ink"]
+    soft, faint = rgba(ink, 0.62), rgba(ink, 0.42)
+    # Liens en cyan comme sur Mac ; la Nuit n'a qu'une couleur.
+    link = t.get("monochrome") or ("#5AC8FA" if t["dark"] else "#0A6FA8")
+    return f"""
+.hello-md {{ font-size: 13.5px; }}
+.hello-md-h1 {{ font-size: 17px; font-weight: 700; }}
+.hello-md-h2 {{ font-size: 15px; font-weight: 700; }}
+.hello-md-h3 {{ font-size: 14px; font-weight: 700; }}
+.hello-md-marker {{ color: {soft}; font-feature-settings: "tnum"; }}
+.hello-md-done {{ color: {soft}; }}
+.hello-md-quote {{ border-left: 2px solid {rgba(ink, 0.28)}; padding-left: 10px; }}
+.hello-md-quotetext {{ color: {soft}; }}
+.hello-md-code {{ background: {rgba(ink, 0.06)}; border-radius: 8px; padding: 10px; }}
+.hello-md-codetext {{ font-family: monospace; font-size: 12px; }}
+.hello-md-lang {{ font-family: monospace; font-size: 9.5px; font-weight: 500; color: {faint}; margin: 6px 8px; }}
+.hello-md-table {{ border: 1px solid {rgba(ink, 0.14)}; border-radius: 8px; }}
+.hello-md-cell {{ padding: 6px 10px; border-top: 1px solid {rgba(ink, 0.06)}; font-size: 12.5px; }}
+.hello-md-cell.head {{ background: {rgba(ink, 0.05)}; border-top: none; }}
+.hello-md-cell.first {{ border-top: 1px solid {rgba(ink, 0.2)}; }}
+.hello-md-rule {{ min-height: 1px; background: {rgba(ink, 0.12)}; margin: 4px 0; }}
+.hello-md-formula {{ margin: 4px 0; }}
+.hello-md link, .hello-md link:visited, .hello-md link:hover {{ color: {link}; }}
+.hello-md selection, .hello-md label > selection {{ background-color: {rgba(t['accent'], 0.35)}; }}
 """
 
 

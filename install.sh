@@ -43,7 +43,8 @@ if [[ "${1:-}" == "uninstall" ]]; then
     exit 0
 fi
 
-# Dépendances : Python GObject, GTK 4, libadwaita ; gtk4-layer-shell et wl-clipboard fortement conseillés.
+# Dépendances : Python GObject, GTK 4, libadwaita ; gtk4-layer-shell et wl-clipboard fortement conseillés ;
+# numpy pour les icônes au trait de la Nuit (Atelier Glyphe).
 missing=()
 python3 - <<'PY' || missing+=(gtk)
 import gi
@@ -52,14 +53,15 @@ from gi.repository import Gtk, Adw
 PY
 python3 -c 'import gi; gi.require_version("Gtk4LayerShell", "1.0")' 2>/dev/null || missing+=(layer-shell)
 command -v wl-paste >/dev/null || missing+=(wl-clipboard)
+python3 -c 'import numpy' 2>/dev/null || missing+=(numpy)
 if (( ${#missing[@]} )); then
     echo "Il manque : ${missing[*]}"
     if command -v pacman >/dev/null; then
-        echo "  sudo pacman -S --needed python-gobject gtk4 libadwaita gtk4-layer-shell wl-clipboard"
+        echo "  sudo pacman -S --needed python-gobject gtk4 libadwaita gtk4-layer-shell wl-clipboard python-numpy"
     elif command -v apt >/dev/null; then
-        echo "  sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtk4layershell-1.0 wl-clipboard"
+        echo "  sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtk4layershell-1.0 wl-clipboard python3-numpy"
     elif command -v dnf >/dev/null; then
-        echo "  sudo dnf install python3-gobject gtk4 libadwaita gtk4-layer-shell wl-clipboard"
+        echo "  sudo dnf install python3-gobject gtk4 libadwaita gtk4-layer-shell wl-clipboard python3-numpy"
     fi
     [[ " ${missing[*]} " == *" gtk "* ]] && exit 1
     echo "(Hello marche sans, avec moins de fonctions.)"

@@ -177,7 +177,8 @@ class HelloApp(Adw.Application):
     def _setting_changed(self, name):
         visual = {"panelStyle", "atelierPalette", "atelierSwap", "atelierAppearance", "atelierColoredSelection",
                   "glyphAccent", "glyphAppearance", "glyphAutoNight", "glyphNightStart", "glyphNightEnd",
-                  "glyphNightLevel", "asciiDecode", "phosphorColor", "paperTone", "brutalColor", "glassTintHex", "glassTintAmount", "glassBorder",
+                  "glyphNightLevel", "glyphNightOutline", "glyphNightEdges", "glyphNightEdgeDetail",
+                  "glyphNightIconOpacity", "glyphNightIconColors", "asciiDecode", "phosphorColor", "paperTone", "brutalColor", "glassTintHex", "glassTintAmount", "glassBorder",
                   "highlightHex", "highlightAmount", "cornerRadius", "rowDensity", "textScale", "animationSpeed",
                   "motionIntensity", "showSubtitles", "showAccessories", "showHints", "panelSize"}
         if name in visual:

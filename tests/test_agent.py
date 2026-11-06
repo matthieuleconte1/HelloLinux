@@ -417,15 +417,34 @@ class GlyphTests(unittest.TestCase):
         settings.panelStyle = "glyph"
         settings.glyphAppearance = "dark"
         t = styles.tokens()
-        self.assertEqual((t["style"], t["surface"], t["selection"], t["primary_key"]),
-                         ("glyph", "#050403", "#F1F1F1", ("#ED6A0C", "#FFFFFF")))
+        # 2.1 : panneau Sombre détaché du cadre d'un cran, sélection en blanc cassé chaud.
+        self.assertEqual((t["style"], t["surface"], t["pane"], t["selection"], t["primary_key"]),
+                         ("glyph", "#050403", "#100E0C", "#ECE9E4", ("#ED6A0C", "#FFFFFF")))
+        self.assertTrue(t["strong_meta"])
         settings.glyphAccent = "mono"
         self.assertEqual(styles.tokens()["primary_key"], ("#FFFFFF", "#050403"))
         settings.glyphAppearance = "night"
         night = styles.tokens()
         self.assertTrue(night["chrome_caps"])
         self.assertEqual(night["mark"][0], "glyph")
+        # La Nuit : ligne choisie cernée, pastille choisie remplie, icônes au trait et atténuées, une seule couleur.
+        self.assertIsNone(night["selection_ink"])
+        self.assertIn("inset 0 0 0 1.5px", night["selection_extra"])
+        self.assertEqual(night["tile"][3:5], (night["ink"], "#000000"))
+        self.assertEqual((night["icon_outline"], night["icon_opacity"], night["icon_edges"], night["monochrome"]),
+                         (True, 0.25, 0.6, night["ink"]))
+        settings.glyphNightOutline = False
+        settings.glyphNightIconOpacity = 0.0
+        self.assertEqual(styles.tokens()["icon_opacity"], 0.1)   # sans contour, une icône à 0 % disparaîtrait
+        settings.glyphNightOutline = True
+        settings.glyphNightIconOpacity = 0.25
+        settings.glyphNightIconColors = True
+        self.assertIsNone(styles.tokens()["icon_filter"])
+        settings.glyphNightIconColors = False
         css = styles.css() + styles.reveal_css()
+        self.assertIn(".hello-outline", css)
+        self.assertIn(".hello-appicon, .hello-tile { opacity: 0.25;", css)
+        self.assertIn(f".hello-md link, .hello-md link:visited, .hello-md link:hover {{ color: {night['ink']}; }}", css)
         self.assertIn("dashed", css)
         self.assertIn(".hello-panel.reveal {", css)
         # Glyphe décode ses lignes ; les autres styles les font arriver en cascade (arrive-0…13).
@@ -433,6 +452,7 @@ class GlyphTests(unittest.TestCase):
         for style in ("kde", "glass", "atelier", "phosphor", "paper", "brutal"):
             settings.panelStyle = style
             self.assertIn(f".arrive-{styles.ARRIVAL_ROWS - 1} ", styles.reveal_css())
+            self.assertIn(".hello-md-table", styles.css())
 
 
 if __name__ == "__main__":

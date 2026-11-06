@@ -92,6 +92,12 @@ captures d'écran), **Code** ouvre une session de code dans le terminal. « ?? �
 et 3. Chaque niveau a son fournisseur : **Hermes**, **Claude Code** ou **Codex** (Réglages › Agent, avec le
 modèle et l'effort de raisonnement).
 
+Les réponses s'affichent en Markdown, avec tableaux et formules LaTeX (`$…$`, `$$…$$`, matrices, `cases`,
+`aligned`), composées sur place par Hello, sans LaTeX installé : une formule simple s'écrit en caractères (𝑥² ≤ 𝛼,
+sélectionnable), les autres sont dessinées dans une police mathématique (STIX Two Math, sinon Latin Modern Math,
+DejaVu Math TeX Gyre ou Noto Sans Math) et posées sur la ligne de base du texte. Clic droit sur une formule : copier
+son LaTeX. L'IA sait qu'elle peut s'en servir.
+
 Sous une réponse, la barre de recherche revient pour une question de suite (↵ niveau 1, Ctrl ↵ niveau 2,
 Alt ↵ niveau 3) : l'IA reçoit les échanges précédents. Les conversations sont gardées (mode « Conversations »,
 `hello --show chats`, ou « /resume »). Les commandes « / » : `/resume`, `/new`, `/fast`, `/work`, `/code`,
@@ -108,6 +114,16 @@ dans `~/.config/kdeglobals`, avec une sélection à la Plasma 6 (accent léger e
 Changer de thème dans la Configuration du système met Hello à jour tout de suite, icône de la zone de
 notification comprise. Les cinq styles de la version Mac restent disponibles (« style » dans le panneau, ou
 Réglages › Apparence).
+
+## La Nuit d'Atelier Glyphe
+
+Rouge sur noir, à la main ou automatiquement aux heures choisies. La ligne choisie est cernée (un bloc rouge plein
+éblouit dans le noir) et ce qu'elle contient se remplit. Les icônes d'apps sont dessinées au trait : un filet le long
+de leur bord et leurs traits intérieurs, détourés automatiquement (différence de flous gaussiens, XDoG), sur leur
+couleur atténuée ; choisies, elles reprennent leur pleine couleur, traits gravés en noir. Contour, traits, détail,
+opacité et couleurs se règlent dans Réglages › Apparence (le dessin au trait demande numpy). Tout ce qui aurait une
+autre couleur (statuts de l'IA, niveaux, liens) passe au rouge. Dans les grilles d'apps et d'emoji, les éléments
+apparaissent d'abord en ASCII puis passent en fondu à l'image ; seul le nom de la case choisie se décode.
 
 ## La zone de notification
 
@@ -138,6 +154,8 @@ dans Réglages › Général.
 | `hello/clipboard.py`, `hello/glyphs.py`, `hello/colors.py` | presse-papiers, emoji, pipette et panneau Plasma |
 | `hello/uninstall.py` | désinstallation |
 | `hello/agent.py`, `hello/engines.py` | l'agent et ses trois niveaux ; Hermes, Claude Code et Codex (arguments, flux JSON) |
+| `hello/markdown.py`, `hello/latex.py`, `hello/ui_markdown.py` | réponses de l'IA : lecture du Markdown et des tableaux, composition des formules LaTeX (boîtes à la TeX, Pango et Cairo), widgets GTK |
+| `hello/icontrace.py` | icônes au trait de la Nuit (filet et XDoG, numpy) et version ASCII des icônes pour le fondu des grilles |
 | `hello/chats.py`, `hello/context.py`, `hello/confirm.py` | conversations, pièces jointes et contexte, Échap en deux temps |
 | `hello/updater.py` | mises à jour depuis les releases GitHub |
 | `data/icons/` | les icônes de Hello, tirées de [Phosphor](https://phosphoricons.com) (licence MIT, `LICENSE-phosphor`) ; le menu de la zone de notification garde celles du thème, puisque c'est Plasma qui le dessine |

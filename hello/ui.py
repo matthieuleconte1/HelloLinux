@@ -5,13 +5,12 @@ Sous Wayland, la fenêtre est une surface « layer-shell » qui couvre l'écran 
 au-dessus de tout, un clic à côté le referme, et l'agrandissement vers la grille d'applications ne déplace rien."""
 import math
 import os
-import re
 from html import escape
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from . import blur as blurmod
-from . import decode, engines, shell, styles, usage
+from . import decode, engines, icontrace, shell, styles, usage
 from .agent import Hermes
 from .glyphs import FILTERS
 from .mark import AnimatedMark, DotWave, Flourish, Sweep
@@ -19,6 +18,7 @@ from .model import EMPTY_TEXT, MODES, mode_title
 from .settings import decodes, grid_columns, icon_size, motion_enabled, motion_speed, panel_size, settings
 from .styles import ARRIVAL_ROWS, ARRIVALS, rgb, section_title, tokens
 from .term import TermStyle, hex_color
+from .ui_markdown import MarkdownView
 
 try:
     from gi.repository import Gtk4LayerShell as LayerShell
@@ -67,6 +67,131 @@ def swatch(color, size):
     return area
 
 
+class IconOutline(Gtk.DrawingArea):
+    """La Nuit : le dessin au trait d'une icône d'app (icontrace.py), posé sur elle, à l'encre du style (gravé en
+    noir dans l'icône choisie). Calculé à part ; il apparaît en fondu une fois prêt."""
+
+    def __init__(self, gicon, size, edges):
+        super().__init__()
+        self.add_css_class("hello-outline")
+        self.set_can_target(False)
+        self.surface = None
+        self.set_draw_func(self._draw)
+        kind = icontrace.Kind(size >= 48, edges)
+        path = icontrace.icon_path(gicon, size)
+        self._source = (path, kind)
+        self._cancel = None
+        if not path:
+            return
+        hit = icontrace.cached_outline(path, kind)
+        if hit is not icontrace._MISSING:
+            self._show(hit, animate=False)
+        else:
+            self._request()
+        # Case sortie de l'écran (page passée, liste refaite, panneau fermé) : son calcul, pas encore commencé, n'a
+        # plus lieu d'être ; revenue à l'écran sans son trait, elle le redemande (en cache s'il a fini entre-temps).
+        self.connect("unrealize", lambda *_: self._drop())
+        self.connect("realize", lambda *_: self.surface is None and self._cancel is None and self._request())
+
+    def _request(self):
+        path, kind = self._source
+        self._cancel = icontrace.request_outline(path, kind, self._loaded)
+
+    def _drop(self):
+        if self._cancel:
+            self._cancel()
+            self._cancel = None
+
+    def _loaded(self, result):
+        self._cancel = None
+        self._show(result)
+
+    def _show(self, result, animate=True):
+        if not result:
+            return
+        import cairo
+        data, stride, side = result
+        self.surface = cairo.ImageSurface.create_for_data(data, cairo.FORMAT_A8, side, side, stride)
+        self._data = data
+        if animate and motion_enabled() and self.get_mapped():
+            self.set_opacity(0)
+            target = Adw.PropertyAnimationTarget.new(self, "opacity")
+            self._anim = Adw.TimedAnimation.new(self, 0, 1, int(200 / motion_speed()), target)
+            self._anim.play()
+        self.queue_draw()
+
+    def _draw(self, _a, ctx, w, h):
+        if self.surface is None:
+            return
+        import cairo
+        side = self.surface.get_width()
+        color = self.get_color()
+        ctx.set_source_rgba(color.red, color.green, color.blue, color.alpha)
+        ctx.scale(w / side, h / side)
+        pattern = cairo.SurfacePattern(self.surface)
+        pattern.set_filter(cairo.FILTER_GOOD)
+        ctx.mask(pattern)
+
+
+class AsciiFade(Gtk.DrawingArea):
+    """Glyphe, version légère des grilles (apps, emoji) : l'élément apparaît d'abord en ASCII (sa version en cache,
+    icontrace.py), puis passe en fondu à l'image réelle. Le Decoder règle `apply` image par image."""
+
+    def __init__(self, target):
+        super().__init__()
+        self.target = target
+        self.cells = None
+        self.alpha = 0.0
+        self.add_css_class("hello-asciifade")
+        self.set_can_target(False)
+        self.set_draw_func(self._draw)
+
+    def load_app(self, gicon, size):
+        path = icontrace.icon_path(gicon, size)
+        if not path:
+            return
+        self.cells = icontrace.cached_ascii(path)
+        if self.cells is None:
+            icontrace.request_ascii(path, self._loaded)
+
+    def _loaded(self, cells):
+        self.cells = cells
+
+    def apply(self, alpha):
+        if alpha == self.alpha:
+            return
+        self.alpha = alpha
+        self.target.set_opacity(1 - alpha)
+        self.queue_draw()
+
+    def _draw(self, _a, ctx, w, h):
+        if self.alpha <= 0 or not self.cells:
+            return
+        import cairo
+        side = min(w, h)
+        n = icontrace.ASCII_SIDE
+        cell = side / n
+        x0, y0 = (w - side) / 2, (h - side) / 2
+        color = self.get_color()
+        ctx.set_source_rgba(color.red, color.green, color.blue, color.alpha * self.alpha)
+        ctx.select_font_face("monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        ctx.set_font_size(cell * 1.2)
+        for row, column, char in self.cells:
+            advance = ctx.text_extents(char).x_advance
+            ctx.move_to(x0 + column * cell + (cell - advance) / 2, y0 + row * cell + cell * 0.8)
+            ctx.show_text(char)
+
+
+def faded(widget):
+    """L'élément dans un calque, avec son fondu ASCII (grilles de Glyphe). Renvoie (calque, fondu)."""
+    overlay = Gtk.Overlay(child=widget)
+    overlay.set_halign(widget.get_halign())
+    overlay.set_valign(widget.get_valign())
+    fader = AsciiFade(widget)
+    overlay.add_overlay(fader)
+    return overlay, fader
+
+
 def icon_widget(icon, size):
     """Icône d'un élément : gicon (app), fichier, symbole teinté, couleur ou image."""
     kind = icon[0]
@@ -75,6 +200,12 @@ def icon_widget(icon, size):
             "application-x-executable")
         img.set_pixel_size(size)
         img.add_css_class("hello-appicon")
+        t = tokens()
+        if t.get("icon_outline") and icon[1] is not None and icontrace.available():
+            # La Nuit : l'icône au trait, sur sa couleur atténuée (opacité réglée par la CSS).
+            overlay = Gtk.Overlay(child=img)
+            overlay.add_overlay(IconOutline(icon[1], size, t.get("icon_edges")))
+            return overlay
         return img
     if kind == "file":
         path = icon[1]
@@ -182,32 +313,6 @@ def label(text, css=None, xalign=0.0, ellipsize=True, wrap=False, selectable=Fal
     return lbl
 
 
-def markdown_to_markup(text):
-    """Markdown simple → balisage Pango : titres, gras, italique, code, liens, puces."""
-    out = []
-    in_code = False
-    for line in text.split("\n"):
-        if line.strip().startswith("```"):
-            in_code = not in_code
-            continue
-        if in_code:
-            out.append(f"<tt>{escape(line)}</tt>")
-            continue
-        s = escape(line)
-        s = re.sub(r"`([^`]+)`", r"<tt>\1</tt>", s)
-        s = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", s)
-        s = re.sub(r"(?<![*\w])\*([^*\n]+)\*(?!\w)", r"<i>\1</i>", s)
-        s = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', s)
-        m = re.match(r"^(#{1,6})\s+(.*)$", s)
-        if m:
-            size = {1: "x-large", 2: "large"}.get(len(m.group(1)), "medium")
-            s = f'<span size="{size}" weight="bold">{m.group(2)}</span>'
-        elif re.match(r"^\s*[-*]\s+", s):
-            s = re.sub(r"^(\s*)[-*]\s+", r"\1•  ", s)
-        out.append(s)
-    return "\n".join(out)
-
-
 # MARK: - Fenêtre
 
 class LauncherWindow(Gtk.ApplicationWindow):
@@ -236,6 +341,8 @@ class LauncherWindow(Gtk.ApplicationWindow):
         self._reveal_time = 0.0      # début de la dernière ouverture complète (la cascade de Glyphe part de là)
         self._decoded = (None, set())
         self._decoded_selection = None
+        self._decoded_cell = None
+        self._glyph_faders = {}      # position -> fondu ASCII de la case d'emoji affichée
         self._agent_shape = None
 
         if self.layer:
@@ -864,10 +971,31 @@ class LauncherWindow(Gtk.ApplicationWindow):
             if m.glyphs and self._glyph_selection.get_selected() != m.selection:
                 self._glyph_selection.set_selected(m.selection)
                 self.glyph_view.scroll_to(m.selection, Gtk.ListScrollFlags.NONE, None)
+            # Glyphe : l'emoji qu'on sélectionne repasse brièvement par l'ASCII.
+            if decodes() and m.selection != self._decoded_glyph:
+                first = self._decoded_glyph is None
+                self._decoded_glyph = m.selection
+                entry = self._glyph_faders.get(m.selection)
+                if entry and not first:
+                    fader, char = entry
+                    fader.cells = icontrace.ascii_char(char)
+                    self.decoder.fade(fader, 0.0, True)
             return
         if m.mode == "apps" and getattr(self, "carousel", None):
             for i, cell in enumerate(self._rows):
                 (cell.add_css_class if i == m.selection else cell.remove_css_class)("selected")
+            if decodes() and 0 <= m.selection < len(self._rows) and m.selection != self._decoded_cell:
+                cell = self._rows[m.selection]
+                first = self._decoded_cell is None
+                self._decoded_cell = m.selection
+                delay = 0.0
+                if first:
+                    column, row = cell.slot
+                    delay = (column + row) * 0.03 / motion_speed()
+                for widget, text in cell.decode[1]:
+                    self.decoder.text(widget, text, delay, not first)
+                if not first and cell.fade is not None:
+                    self.decoder.fade(cell.fade, 0.0, True)
             page = m.app_page
             if page < self.carousel.get_n_pages() and round(self.carousel.get_position()) != page:
                 self.carousel.scroll_to(self.carousel.get_nth_page(page), settings.animations)
@@ -925,7 +1053,8 @@ class LauncherWindow(Gtk.ApplicationWindow):
         carousel.set_allow_scroll_wheel(True)
         carousel.set_spacing(0)
         self._rows = []
-        ascii_icons = bool(tokens().get("ascii"))
+        self._decoded_cell = None
+        fades = decodes()
         for page_start in range(0, max(len(m.items), 1), per):
             grid = Gtk.Grid()
             grid.set_row_homogeneous(True)
@@ -949,17 +1078,20 @@ class LauncherWindow(Gtk.ApplicationWindow):
                 cell.set_size_request(112, 112)
                 img = icon_widget(item.icon, 64)
                 img.set_halign(Gtk.Align.CENTER)
-                cover = None
-                if ascii_icons:
-                    img, cover = covered(img)
+                fader = None
+                if fades:
+                    # Glyphe : l'icône part de sa version ASCII et passe en fondu à l'image (préparée à part).
+                    img, fader = faded(img)
+                    if item.icon[0] == "gicon":
+                        fader.load_app(item.icon[1], 64)
                 cell.append(img)
                 name = label(item.title, "hello-cell-label", xalign=0.5)
                 name.set_max_width_chars(12)
                 cell.append(name)
-                # Glyphe : les icônes se décodent quand la page apparaît, en diagonale.
-                cell.decode = (item.id, [(name, item.title)], cover)
-                if ascii_icons and decodes() and slot < per:
-                    self._decode_row(cell, (slot % columns + slot // columns) * 0.03 / motion_speed(), True)
+                # Seul le nom de la case choisie se décode : trente-cinq textes animés à la fois saccadaient.
+                cell.decode = (item.id, [(name, item.title)], None)
+                cell.fade = fader
+                cell.slot = (slot % columns, slot // columns)
                 if item.accessory:
                     dot = Gtk.Box()
                     dot.add_css_class("hello-dot")
@@ -974,6 +1106,8 @@ class LauncherWindow(Gtk.ApplicationWindow):
                 self._rows.append(cell)
             carousel.append(grid)
         carousel.connect("page-changed", self._page_changed)
+        if fades:
+            self._fade_page(min(m.app_page, max((len(m.items) - 1) // per, 0)), quick=False)
         box.append(carousel)
         dots = Adw.CarouselIndicatorDots(carousel=carousel)
         dots.add_css_class("hello-dots")
@@ -995,6 +1129,18 @@ class LauncherWindow(Gtk.ApplicationWindow):
         m = self.model
         if m.mode == "apps" and m.app_page != page:
             m.select(min(page * m.apps_per_page, len(m.items) - 1))
+            if decodes():
+                self._fade_page(page, quick=True)
+
+    def _fade_page(self, page, quick):
+        """Glyphe : les icônes d'une page qui apparaît passent de l'ASCII à l'image, en diagonale."""
+        m = self.model
+        per = m.app_columns * m.app_rows
+        speed = motion_speed()
+        for cell in self._rows[page * per:(page + 1) * per]:
+            if getattr(cell, "fade", None) is not None:
+                column, row = cell.slot
+                self.decoder.fade(cell.fade, (column + row) * 0.03 / speed, quick)
 
     # Emoji
 
@@ -1003,21 +1149,52 @@ class LauncherWindow(Gtk.ApplicationWindow):
         self._glyph_store = Gtk.StringList.new([str(i) for i in range(len(m.glyphs))])
         self._glyph_selection = Gtk.SingleSelection(model=self._glyph_store)
         self._glyph_selection.set_autoselect(False)
+        self._glyph_faders = {}
+        self._decoded_glyph = None
         factory = Gtk.SignalListItemFactory()
+        fades = decodes()
+        built = GLib.get_monotonic_time() / 1e6
+        columns = grid_columns()
 
         def setup(_f, item):
             lbl = Gtk.Label()
             lbl.add_css_class("hello-glyph")
-            item.set_child(lbl)
+            if fades:
+                holder, fader = faded(lbl)
+                holder.label, holder.fader = lbl, fader
+                item.set_child(holder)
+            else:
+                item.set_child(lbl)
 
         def bind(_f, item):
             idx = int(item.get_item().get_string())
             g = m.glyphs[idx] if idx < len(m.glyphs) else None
-            item.get_child().set_label(g.char if g else "")
-            item.get_child().set_tooltip_text(g.name if g else None)
+            child = item.get_child()
+            lbl = getattr(child, "label", child)
+            lbl.set_label(g.char if g else "")
+            lbl.set_tooltip_text(g.name if g else None)
+            fader = getattr(child, "fader", None)
+            if fader is None or g is None:
+                return
+            fader.cells = None
+            fader.apply(0.0)
+            self._glyph_faders[idx] = (fader, g.char)
+            # Glyphe : la grille passe de l'ASCII aux emoji quand elle apparaît, en diagonale.
+            since = GLib.get_monotonic_time() / 1e6 - built
+            if since < 0.6:
+                fader.cells = icontrace.ascii_char(g.char)
+                column, row = idx % columns, idx // columns
+                self.decoder.fade(fader, max(0.0, (column + row) * 0.03 / motion_speed() - since), False)
+
+        def unbind(_f, item):
+            idx = int(item.get_item().get_string())
+            entry = self._glyph_faders.get(idx)
+            if entry and entry[0] is getattr(item.get_child(), "fader", None):
+                del self._glyph_faders[idx]
 
         factory.connect("setup", setup)
         factory.connect("bind", bind)
+        factory.connect("unbind", unbind)
         view = Gtk.GridView(model=self._glyph_selection, factory=factory)
         view.add_css_class("hello-glyphs")
         view.set_min_columns(grid_columns())
@@ -1185,9 +1362,9 @@ class LauncherWindow(Gtk.ApplicationWindow):
             box.append(self.agent_stage)
             self.agent_steps = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
             box.append(self.agent_steps)
-            self.agent_text = label("", "hello-agent", ellipsize=False, wrap=True, selectable=True)
+            # La réponse : Markdown, tableaux et formules LaTeX (ui_markdown.py).
+            self.agent_text = MarkdownView("hello-agent")
             self.agent_text.set_valign(Gtk.Align.START)
-            self.agent_text.set_use_markup(True)
             box.append(self.agent_text)
             self.agent_details = label("", "hello-preview-text", ellipsize=False, wrap=True, selectable=True)
             box.append(self.agent_details)
@@ -1220,6 +1397,7 @@ class LauncherWindow(Gtk.ApplicationWindow):
         request.set_hexpand(True)
         top.append(request)
         title, _, tint = LEVELS.get(turn.get("level"), LEVELS[1])
+        tint = tokens().get("monochrome") or tint
         level = label(title, "hello-past-level", ellipsize=False)
         level.set_markup(f"<span foreground='{tint}'>{escape(title)}</span>")
         level.set_valign(Gtk.Align.START)
@@ -1228,11 +1406,8 @@ class LauncherWindow(Gtk.ApplicationWindow):
         if turn.get("kind") == "code":
             box.append(label("Envoyé à une session de code dans le terminal", "hello-agent-stage"))
         else:
-            answer = label("", "hello-agent hello-past", ellipsize=False, wrap=True, selectable=True)
-            try:
-                answer.set_markup(markdown_to_markup(turn.get("answer") or ""))
-            except GLib.Error:
-                answer.set_text(turn.get("answer") or "")
+            answer = MarkdownView("hello-agent hello-past")
+            answer.set_text(turn.get("answer") or "")
             box.append(answer)
         return box
 
@@ -1312,8 +1487,11 @@ class LauncherWindow(Gtk.ApplicationWindow):
                 self.status.append(clip)
         self.agent_request.set_visible(not a.is_thinking or bool(a.earlier))
         title, icon, tint = LEVELS[a.level]
+        # La Nuit : une seule couleur pour tout ce qui en aurait une autre (statuts, niveaux).
+        mono = tokens().get("monochrome")
+        tint = mono or tint
         auto = a.is_thinking and a.stage == "choisit le niveau"
-        shape = (a.level, auto, tuple(x.path for x in a.attachments))
+        shape = (a.level, auto, tuple(x.path for x in a.attachments), tint)
         if self._agent_shape != shape:
             self._agent_shape = shape
             for w in list(_children(self.agent_badge)):
@@ -1342,20 +1520,15 @@ class LauncherWindow(Gtk.ApplicationWindow):
         img = Gtk.Image.new_from_icon_name(status[0])
         self.agent_stage.append(img)
         stage = label("", "hello-title", ellipsize=False, wrap=True)
-        stage.set_markup(f"<span foreground='{status[1]}'>{escape(status[2])}</span>")
+        stage.set_markup(f"<span foreground='{mono or status[1]}'>{escape(status[2])}</span>")
         self.agent_stage.append(stage)
         self._update_steps(a)
-        if a.phase == "failed":
-            text = f"<tt>{escape(a.text)}</tt>"
-        elif a.phase == "delegated":
-            text = escape(a.text)
-        else:
-            text = markdown_to_markup(a.text)
-        if text != self._agent_text_shown:
-            self._agent_text_shown = text
-            try:
-                self.agent_text.set_markup(text)
-            except GLib.Error:
+        shown = (a.phase in ("failed", "delegated"), a.phase == "failed", a.text)
+        if shown != self._agent_text_shown:
+            self._agent_text_shown = shown
+            if a.phase in ("failed", "delegated"):
+                self.agent_text.set_plain(a.text, monospace=a.phase == "failed")
+            else:
                 self.agent_text.set_text(a.text)
             self._follow_stream()
         self.agent_text.set_visible(bool(a.text))

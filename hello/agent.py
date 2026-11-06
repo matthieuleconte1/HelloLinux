@@ -154,6 +154,12 @@ class Hermes:
         return args
 
 
+# Ce que Hello affiche des réponses (ui_markdown.py) : l'IA peut écrire des tableaux et des formules.
+FORMATTING = ("Answers are rendered as Markdown: headings, lists, task lists, code blocks, GFM pipe tables (use them to "
+              "compare things), and LaTeX math — inline with $…$, display on its own lines with $$…$$ (fractions, "
+              "roots, sums, integrals, matrices, cases and aligned environments are supported).")
+
+
 def router_prompt(request, context):
     """Phase 1 : classement sans outils (rapide, ne peut rien faire lui-même)."""
     if settings.agentStrategy == "delegate":
@@ -163,7 +169,7 @@ def router_prompt(request, context):
         forms = (
             "Decide the level of effort needed and reply with exactly one of these forms and nothing else:\n"
             "ANSWER: <short answer in the user's language> — level 1, fast: a short answer you are sure of is enough "
-            "(fact, definition, conversion, which command to use).\n"
+            f"(fact, definition, conversion, which command to use, a formula). {FORMATTING}\n"
             "WORK: <the request rewritten as a precise, self-contained instruction in the user's language> — level 2, "
             "research and action: needs up-to-date information, web search, comparing sources or a thoughtful "
             "explanation, or any action on this computer (open, launch or control apps, change a setting, find, open "
@@ -190,7 +196,7 @@ def work_prompt(instruction, context):
 
 You can both research and act.
 For a question: research it carefully (use the web when useful) and answer in the user's language, structured \
-and concise, with short sections or bullet points when it helps, and cite sources as markdown links.
+and concise, with short sections or bullet points when it helps, and cite sources as markdown links. {FORMATTING}
 For an action: do it now on this Linux computer, with as few tool calls as possible. Ways to act, in order of preference:
 1. Shell: `xdg-open` (files, folders, URLs), `gtk-launch <app>.desktop` to start an app, `fd` / `find` / `locate` \
 to find files, `wl-copy` / `wl-paste`, `notify-send`, `playerctl` (media), `wpctl` / `pactl` (volume), `nmcli`, \

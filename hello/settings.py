@@ -100,6 +100,13 @@ DEFAULTS = {
     "glyphNightStart": 22,
     "glyphNightEnd": 7,
     "glyphNightLevel": 0.85,
+    # Nuit : icônes d'apps au trait (contour, traits intérieurs détourés et leur détail), opacité au repos,
+    # couleurs gardées plutôt que le rouge.
+    "glyphNightOutline": True,
+    "glyphNightEdges": True,
+    "glyphNightEdgeDetail": 0.6,
+    "glyphNightIconOpacity": 0.25,
+    "glyphNightIconColors": False,
     "phosphorColor": "green",
     "paperTone": "cream",
     "brutalColor": "pink",
@@ -189,7 +196,9 @@ class Settings:
                     "highlightAmount", "cornerRadius", "rowDensity", "textScale", "showSubtitles",
                     "showAccessories", "showHints", "focusMode", "atelierPalette", "atelierSwap",
                     "atelierAppearance", "atelierColoredSelection", "glyphAccent", "glyphAppearance", "glyphAutoNight",
-                    "glyphNightStart", "glyphNightEnd", "glyphNightLevel", "phosphorColor", "paperTone", "brutalColor"):
+                    "glyphNightStart", "glyphNightEnd", "glyphNightLevel", "glyphNightOutline", "glyphNightEdges",
+                    "glyphNightEdgeDetail", "glyphNightIconOpacity", "glyphNightIconColors", "phosphorColor",
+                    "paperTone", "brutalColor"):
             setattr(self, key, DEFAULTS[key])
 
 
