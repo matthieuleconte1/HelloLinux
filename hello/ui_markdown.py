@@ -140,7 +140,9 @@ class RichText(Gtk.Widget):
             return int(min(logical.width, max(widest + 2, 60))), logical.width, -1, -1
         layout.set_width(for_size * Pango.SCALE if for_size > 0 else -1)
         _, logical = layout.get_pixel_extents()
-        return logical.height, logical.height, -1, -1
+        # Ligne de base de la première ligne : la puce d'une liste s'y aligne, comme sur un label.
+        baseline = layout.get_baseline() // Pango.SCALE
+        return logical.height, logical.height, baseline, baseline
 
     def do_size_allocate(self, width, height, baseline):
         self.layout.set_width(width * Pango.SCALE)
@@ -156,7 +158,7 @@ class RichText(Gtk.Widget):
         PangoCairo.update_layout(ctx, self.layout)
         # Plus de place que le texte (cellule d'un tableau) : centré verticalement, comme un label.
         _, logical = self.layout.get_pixel_extents()
-        top = max((height - logical.height) / 2, 0)
+        top = 0 if self.get_valign() == Gtk.Align.BASELINE_FILL else max((height - logical.height) / 2, 0)
         ctx.translate(0, top)
         ctx.move_to(0, 0)
         PangoCairo.show_layout(ctx, self.layout)
@@ -271,6 +273,13 @@ def _table(table):
     return grid
 
 
+def _on_baseline(row):
+    """Puce (ou case) et texte alignés sur la première ligne de base, même quand le texte porte une formule haute."""
+    for child in _children(row):
+        child.set_valign(Gtk.Align.BASELINE_FILL)
+    return row
+
+
 def block_widget(block):
     kind = block[0]
     if kind == "heading":
@@ -284,22 +293,19 @@ def block_widget(block):
         row.set_margin_start(indent * 16)
         mark = Gtk.Label(label=marker)
         mark.add_css_class("hello-md-marker")
-        mark.set_valign(Gtk.Align.START)
-        mark.set_yalign(0)
         row.append(mark)
         row.append(inline(content))
-        return row
+        return _on_baseline(row)
     if kind == "task":
         _, indent, done, content = block
         row = Gtk.Box(spacing=7)
         row.set_margin_start(indent * 16)
         mark = Gtk.Label(label="☑" if done else "☐")
         mark.add_css_class("hello-md-marker")
-        mark.set_valign(Gtk.Align.START)
         row.append(mark)
         row.append(inline(content, css="hello-md-done" if done else None,
                           wrap_markup=(lambda m: f"<s>{m}</s>") if done else None))
-        return row
+        return _on_baseline(row)
     if kind == "quote":
         box = Gtk.Box()
         box.add_css_class("hello-md-quote")
