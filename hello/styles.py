@@ -577,7 +577,12 @@ def reveal_css():
     l'ouverture du panneau, l'arrivée des lignes en cascade (classes arrive-N posées par la fenêtre) et du pied de
     page, le changement d'écran (enter-forward / enter-back) et l'effacement quand on lance une app (closing).
     Les ressorts sont échantillonnés en images clés (motion.keyframes) ; les dessins (reflet, onde, tube, encre…)
-    sont dans mark.py."""
+    sont dans mark.py.
+
+    Pas d'échelle animée à l'ouverture (panneau et lignes), contrairement au Mac : à chaque nouvelle échelle, GSK
+    re-rastérise tous les glyphes du panneau, soit 5 à 12 ms de plus par image (le Verre passait de 5,7 à 17,8 ms en
+    GL). Les ouvertures tombaient à 40-80 images par seconde sur un écran à 240 Hz ; elles bougent donc en
+    translation, rotation et fondu, que le GPU compose sans rien redessiner."""
     t = tokens()
     style = t["style"]
     speed = motion_speed()
@@ -599,15 +604,16 @@ def reveal_css():
 
     # Ouverture du panneau (RevealStyle.open et PanelReveal).
     if style == "glass":
-        # Le verre grossit avec le ressort ; il doit être visible tout de suite, d'où un fondu à part, bien plus court.
+        # Le verre descend en se posant avec le ressort ; il doit être visible tout de suite, d'où un fondu à part,
+        # bien plus court.
         opening = sprung("hello-reveal", Spring(0.46, 0.7), lambda p, s: (
-            f"opacity: {clamp01(s * speed / 0.1):.3f}; transform: scale({1 - 0.12 * k * (1 - p):.4f}); "
+            f"opacity: {clamp01(s * speed / 0.1):.3f}; transform: translateY({-14 * k * (1 - p):.2f}px); "
             f"filter: blur({max(0.0, 8 * k * (1 - p)):.2f}px);"))
         origin = "50% 7%"
     elif style == "atelier":
-        # Le déploiement d'Atelier est aussi un ressort de hauteur (ui.py) ; ici l'échelle horizontale et le fondu.
+        # Le déploiement d'Atelier est un ressort de hauteur (ui.py) ; ici la descente et le fondu.
         opening = sprung("hello-reveal", Spring(0.44, 0.72), lambda p, s: (
-            f"{fade(p)} transform: translateY({-10 * k * (1 - p):.2f}px) scale({1 - 0.05 * k * (1 - p):.4f}, 1);"))
+            f"{fade(p)} transform: translateY({-10 * k * (1 - p):.2f}px);"))
         origin = "50% 0"
     elif style == "phosphor":
         # Le Phosphore s'allume sous le dessin du tube (mark.py) : le panneau est là tout de suite.
@@ -620,7 +626,7 @@ def reveal_css():
         origin = "50% 0"
     elif style == "glyph":
         opening = sprung("hello-reveal", Spring(0.46, 0.8), lambda p, s: (
-            f"{fade(p)} transform: translateY({6 * k * (1 - p):.2f}px) scale({1 - 0.03 * k * (1 - p):.4f});"))
+            f"{fade(p)} transform: translateY({8 * k * (1 - p):.2f}px);"))
         origin = "50% 0"
     elif style == "brutal":
         # Il tombe de haut, s'écrase sur son ombre pleine (qui rentre presque toute au rebond), puis se pose.
@@ -628,13 +634,13 @@ def reveal_css():
 
         def slam(p, s):
             shadow = o * (1 + 1.6 * (1 - p)) if p < 1 else o * max(0.2, 1 - 4 * (p - 1))
-            return (f"{fade(p)} transform: translateY({-48 * k * (1 - p):.2f}px) scale({1 + 0.04 * k * (1 - p):.4f}) "
+            return (f"{fade(p)} transform: translateY({-48 * k * (1 - p):.2f}px) "
                     f"rotate({-1.5 * k * (1 - p):.3f}deg); box-shadow: {shadow:.1f}px {shadow:.1f}px 0 0 {c};")
         opening = sprung("hello-reveal", Spring(0.36, 0.5), slam)
         origin = "50% 50%"
     else:   # KDE : comme un menu de Plasma, vif et sans rebond.
         opening = sprung("hello-reveal", Spring(0.38, 0.86), lambda p, s: (
-            f"{fade(p)} transform: translateY({-10 * k * (1 - p):.2f}px) scale({1 - 0.015 * k * (1 - p):.4f});"))
+            f"{fade(p)} transform: translateY({-10 * k * (1 - p):.2f}px);"))
         origin = "50% 0"
     block, length, easing = opening
     out = [twin(block, "hello-reveal"), f".hello-panel.reveal {{ animation: hello-reveal {length} {easing} both; "
@@ -642,7 +648,7 @@ def reveal_css():
            ".hello-panel.reveal.again { animation-name: hello-reveal-b; }"]
     # Réouverture rapide (le Verre) : un petit ressort vif.
     block, length, _ = sprung("hello-reveal-light", snappy(0.14), lambda p, s: (
-        f"{fade(p * 1.4)} transform: scale({1 - 0.01 * (1 - p):.4f});"))
+        f"{fade(p * 1.4)} transform: translateY({-3 * (1 - p):.2f}px);"))
     out += [twin(block, "hello-reveal-light"), f".hello-panel.reveal-light {{ animation: hello-reveal-light {length} linear both; }}",
             ".hello-panel.reveal-light.again { animation-name: hello-reveal-light-b; }"]
 
@@ -656,7 +662,7 @@ def reveal_css():
             f"{fade(p)} transform: translateY({10 * k * (1 - p):.2f}px);"))
     elif style == "atelier":
         rows = sprung("hello-arrive", Spring(0.5, 0.72), lambda p, s: (
-            f"{fade(p)} transform: translateY({18 * k * (1 - p):.2f}px) scale({1 - 0.06 * k * (1 - p):.4f});"))
+            f"{fade(p)} transform: translateY({18 * k * (1 - p):.2f}px);"))
     elif style == "phosphor":
         # Une ligne après l'autre, sans fondu : comme un terminal qui affiche sa sortie.
         rows = eased("hello-arrive", "0% { opacity: 0; } 99% { opacity: 0; } 100% { opacity: 1; }", 30, "linear")
@@ -665,7 +671,7 @@ def reveal_css():
                                      "to { opacity: 1; transform: translateX(0); }", 340, "ease-out")
     elif style == "brutal":
         rows = sprung("hello-arrive", Spring(0.32, 0.5), lambda p, s: (
-            f"{fade(p)} transform: translateY({14 * k * (1 - p):.2f}px) scale({1 - 0.15 * k * (1 - p):.4f});"))
+            f"{fade(p)} transform: translateY({16 * k * (1 - p):.2f}px);"))
     if rows:
         block, length, easing = rows
         first, step = ARRIVALS[style]

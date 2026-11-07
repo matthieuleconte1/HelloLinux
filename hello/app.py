@@ -8,7 +8,7 @@ import time
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from . import colors as colormod
-from . import context, engines
+from . import context, engines, launchenv
 from .agent import Hermes
 from .apps import AppIndex
 from .clipboard import ClipboardHistory
@@ -64,6 +64,8 @@ class HelloApp(Adw.Application):
 
     def do_startup(self):
         Adw.Application.do_startup(self)
+        # Première fenêtre réalisée (panneau, réglages…) : GTK a retenu le moteur GL, la variable peut partir.
+        self.connect("window-added", lambda _app, window: window.connect_after("realize", launchenv.release_renderer))
         self.hold()  # pas de fenêtre visible la plupart du temps : l'app reste en vie
         # Clic sur la notification de l'IA : Hello rouvre la conversation.
         show = Gio.SimpleAction.new("show-agent", None)

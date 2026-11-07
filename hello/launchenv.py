@@ -7,6 +7,12 @@ gtk_init() »), alors qu'elle s'ouvre bien depuis le menu de Plasma. Elles s'emp
 install.sh relançant Hello avec l'environnement hérité.
 
 Une fois Python démarré, la bibliothèque est chargée et sys.path est fixé : on peut les retirer sans effet sur Hello.
+
+Moteur de rendu de GSK : Hello dessine avec le moteur GL plutôt que Vulkan (le défaut de GTK sous Wayland). Sur la
+même ouverture de panneau, Vulkan coûtait 8 à 14 ms par image contre 4 à 7 ms en GL (RTX 4070, écran à 240 Hz,
+scripts/bench-motion.py --replay) : l'animation ne suivait plus l'écran. GTK lit GSK_RENDERER une seule fois, au
+premier moteur créé (réalisation de la première fenêtre) : Hello la pose au démarrage et la retire juste après, pour
+que les apps lancées gardent leur propre moteur. Un GSK_RENDERER posé par l'utilisateur est respecté.
 """
 import os
 import re
@@ -33,6 +39,30 @@ def cleaned(env):
     else:
         env.pop("PYTHONPATH", None)
     return env
+
+
+RENDERER = "gl"
+_own_renderer = False
+
+
+def choose_renderer(env=os.environ):
+    """Le moteur GL pour Hello, sauf si l'utilisateur en a choisi un. Renvoie True si Hello l'a posé."""
+    global _own_renderer
+    if env.get("GSK_RENDERER"):
+        return False
+    env["GSK_RENDERER"] = RENDERER
+    if env is os.environ:
+        _own_renderer = True
+    return True
+
+
+def release_renderer(*_):
+    """Retire la variable posée par Hello, une fois le moteur de sa première fenêtre créé (à sa réalisation) :
+    GTK a retenu son choix, les apps lancées ensuite n'en héritent pas."""
+    global _own_renderer
+    if _own_renderer:
+        os.environ.pop("GSK_RENDERER", None)
+        _own_renderer = False
 
 
 def clean_process_environment():

@@ -7,7 +7,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from hello.launchenv import cleaned  # noqa: E402
+from hello.launchenv import RENDERER, choose_renderer, cleaned  # noqa: E402
 
 LIB = "/usr/lib/libgtk4-layer-shell.so"
 
@@ -34,6 +34,16 @@ class LaunchEnvTests(unittest.TestCase):
             env = cleaned({"PYTHONPATH": os.pathsep.join([ROOT, old, user])})
             self.assertEqual(env["PYTHONPATH"], user)
             self.assertNotIn("PYTHONPATH", cleaned({"PYTHONPATH": f"{ROOT}{os.pathsep}{old}"}))
+
+    def test_moteur_gl_par_defaut(self):
+        env = {}
+        self.assertTrue(choose_renderer(env))
+        self.assertEqual(env["GSK_RENDERER"], RENDERER)
+
+    def test_moteur_de_l_utilisateur_respecte(self):
+        env = {"GSK_RENDERER": "vulkan"}
+        self.assertFalse(choose_renderer(env))
+        self.assertEqual(env["GSK_RENDERER"], "vulkan")
 
 
 if __name__ == "__main__":
